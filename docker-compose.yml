@@ -16,7 +16,7 @@ services:
   embedder:
     # Hugging Face Text Embeddings Inference, CPU build: keeps the 4 GB GPU for the LLM.
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-    command: ["--model-id", "BAAI/bge-m3"]
+    command: ["--model-id", "BAAI/bge-m3", "--max-batch-tokens", "2048"]
     ports:
       - "127.0.0.1:8093:80"
     volumes:
