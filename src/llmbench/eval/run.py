@@ -19,8 +19,9 @@ import csv
 import json
 import math
 import statistics
+import urllib.error
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ from llmbench.log import get_logger
 from llmbench.models.bench import git_commit, percentile
 from llmbench.models.hub import ensure_gguf, gguf_relpath
 from llmbench.rag.embed import TEIEmbedder
-from llmbench.rag.pipeline import RagPipeline, Retriever
+from llmbench.rag.pipeline import RagAnswer, RagPipeline, Retriever
 from llmbench.rag.services import wait_for_rag_services
 from llmbench.rag.store import Hit, QdrantStore
 from llmbench.serving.client import StreamError
@@ -142,24 +143,48 @@ def done_variants(csv_path: Path, dataset: str) -> set[tuple[str, str]]:
         }
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    """The server is gone (crashed / restarting), as opposed to a bad answer."""
+    if isinstance(exc, HttpError):
+        return exc.status is None
+    return isinstance(exc, (ConnectionError, urllib.error.URLError, TimeoutError))
+
+
 def evaluate(
     items: Sequence[EvalItem],
     pipeline: RagPipeline,
     llm_base_url: str,
     refusal_markers: Sequence[str],
     hits_by_item: dict[str, list[Hit]] | None = None,
+    recover: Callable[[], str] | None = None,
 ) -> list[AnswerRecord]:
+    """Answer and score every item.
+
+    A failed request never aborts the run: if the LLM server is unreachable, ``recover``
+    (restart the server, return its URL) is called and the question retried once; any
+    remaining failure is recorded as an empty, wrong answer with its error message.
+    """
     records = []
     for n, item in enumerate(items, 1):
         hits = hits_by_item[item.id] if hits_by_item is not None else []
-        try:
-            if hits_by_item is not None:
-                ans = pipeline.answer_from_hits(item.question, hits, llm_base_url)
-            else:
-                ans = pipeline.answer(item.question, llm_base_url)
-        except (StreamError, HttpError) as exc:
-            # One failed request must not discard a long run: record it as a wrong answer.
-            log.warning("question failed", extra={"id": item.id, "error": str(exc)[:200]})
+        ans: RagAnswer | None = None
+        error = ""
+        for attempt in (1, 2):
+            try:
+                if hits_by_item is not None:
+                    ans = pipeline.answer_from_hits(item.question, hits, llm_base_url)
+                else:
+                    ans = pipeline.answer(item.question, llm_base_url)
+                break
+            except (StreamError, HttpError, OSError) as exc:
+                error = f"{type(exc).__name__}: {exc}"[:300]
+                if attempt == 1 and recover is not None and _is_connection_error(exc):
+                    log.warning("LLM server unreachable, restarting", extra={"id": item.id})
+                    llm_base_url = recover()
+                    continue
+                break
+        if ans is None:
+            log.warning("question failed", extra={"id": item.id, "error": error})
             records.append(
                 AnswerRecord(
                     item_id=item.id,
@@ -173,7 +198,7 @@ def evaluate(
                     ttft_ms=math.nan,
                     total_ms=math.nan,
                     gen_tokens=None,
-                    error=str(exc)[:300],
+                    error=error,
                 )
             )
             continue
@@ -349,8 +374,16 @@ def main(argv: list[str] | None = None) -> int:
             with LlamaServer.from_config(
                 server_cfg, gguf_relpath(variant), variant.n_gpu_layers
             ) as srv:
+
+                def recover(server: LlamaServer = srv) -> str:
+                    tail = server.logs(25)
+                    log.warning("llama-server logs before restart", extra={"tail": tail})
+                    server.stop()
+                    server.start()
+                    return server.base_url
+
                 records = evaluate(
-                    items, pipeline, srv.base_url, ecfg.refusal_markers, hits_by_item
+                    items, pipeline, srv.base_url, ecfg.refusal_markers, hits_by_item, recover
                 )
         except DockerRunError as exc:
             print(f"ERROR: {exc}")

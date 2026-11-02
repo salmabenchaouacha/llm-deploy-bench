@@ -369,7 +369,7 @@ def test_failed_question_is_recorded_not_fatal() -> None:
     hits = {"a": [hit("airbus_fy2025", 1)], "b": [hit("airbus_fy2025", 1)]}
     records = evaluate(items, Flaky(), "u", ["do not contain"], hits)  # type: ignore[arg-type]
     assert [r.answer for r in records] == ["", "793 aircraft."]
-    assert records[0].error.startswith("stream ended") and not records[0].score.correct
+    assert "stream ended" in records[0].error and not records[0].score.correct
     assert records[0].score.rank == 1  # retrieval is still scored
     assert aggregate(records)["answer_accuracy"] == 0.5
 
@@ -381,3 +381,57 @@ def test_stream_chat_allow_empty_returns_empty_answer() -> None:
     with fake_llama_server(FakeState([])) as url:
         res = stream_chat(url, [{"role": "user", "content": "x"}], max_tokens=5, allow_empty=True)
     assert res.text == "" and res.n_chunks == 0 and res.ttft_s == res.total_s
+
+
+def test_crashed_server_is_restarted_and_question_retried() -> None:
+    from llmbench.rag.pipeline import RagAnswer
+
+    class Crashy:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def answer_from_hits(self, question: str, hits: list[Hit], url: str) -> RagAnswer:
+            self.calls.append(url)
+            if url == "http://old":
+                raise ConnectionResetError(104, "Connection reset by peer")
+            return RagAnswer(question, "793 aircraft.", hits, 0.0, 10.0, 20.0, 3, 50)
+
+    restarts: list[int] = []
+
+    def recover() -> str:
+        restarts.append(1)
+        return "http://new"
+
+    pipe = Crashy()
+    hits = {"a": [hit("airbus_fy2025", 1)], "b": [hit("airbus_fy2025", 1)]}
+    records = evaluate(
+        [item(id="a"), item(id="b")],
+        pipe,
+        "http://old",  # type: ignore[arg-type]
+        ["do not contain"],
+        hits,
+        recover,
+    )
+    assert len(restarts) == 1  # restarted once, then the new URL is kept
+    assert pipe.calls == ["http://old", "http://new", "http://new"]
+    assert all(r.score.correct and not r.error for r in records)
+
+
+def test_server_that_stays_down_records_errors_without_aborting() -> None:
+    from llmbench.rag.pipeline import RagAnswer
+
+    class Dead:
+        def answer_from_hits(self, question: str, hits: list[Hit], url: str) -> RagAnswer:
+            raise ConnectionRefusedError(111, "Connection refused")
+
+    hits = {"a": [hit("airbus_fy2025", 1)], "b": [hit("airbus_fy2025", 1)]}
+    records = evaluate(
+        [item(id="a"), item(id="b")],
+        Dead(),
+        "u",  # type: ignore[arg-type]
+        ["do not contain"],
+        hits,
+        lambda: "u",
+    )
+    assert [r.answer for r in records] == ["", ""]
+    assert all("ConnectionRefusedError" in r.error for r in records)
