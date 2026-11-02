@@ -1,0 +1,56 @@
+# Lint, type-check and test on every push / pull request; build the API image.
+# No GPU on GitHub runners: tests use fake llama-server / TEI / Qdrant servers, and tests
+# marked `slow` or `gpu` (real models) are skipped.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install (exact versions from uv.lock)
+        run: uv sync --locked
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Type-check
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest -m "not slow and not gpu" --cov=llmbench --cov-report=term
+
+  api-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build the API image
+        run: >
+          docker build -f docker/api.Dockerfile
+          --build-arg UV_VERSION=$(uv --version | cut -d' ' -f2)
+          -t llmbench-api:ci .
+      - name: The image starts and answers (degraded health without llm/qdrant/embedder)
+        run: |
+          docker run -d --name api -p 8000:8000 llmbench-api:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/health || true)
+            [ "$code" = "503" ] && break
+            sleep 1
+          done
+          docker logs api
+          test "$code" = "503"
+          curl -sf localhost:8000/openapi.json > /dev/null
