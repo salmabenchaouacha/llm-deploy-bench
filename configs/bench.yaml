@@ -1,0 +1,52 @@
+# Performance benchmark protocol. Validated by llmbench.config.BenchConfig.
+#
+# Every variant is measured with the same prompts, the same number of generated
+# tokens (ignore_eos) and greedy decoding, so the only thing that changes is the model.
+
+server:
+  # Official llama.cpp server image built with CUDA. Pin a dated tag (e.g. server-cuda-bXXXX)
+  # once the first run works, so results stay reproducible.
+  image: ghcr.io/ggml-org/llama.cpp:server-cuda
+  use_gpu: true
+  host: 127.0.0.1
+  port: 8080
+  n_ctx: 4096
+  startup_timeout_s: 300
+  models_dir: ~/.cache/llmbench/models   # outside the repo: GGUF files are GBs
+
+warmup_runs: 1      # first call pays CUDA/kernel init: never measured
+runs: 3             # repetitions per prompt -> 9 measured generations per variant
+max_new_tokens: 128
+ignore_eos: true
+gpu_index: 0
+
+prompts:
+  # 1. Short prompt: measures time-to-first-token with almost no prefill.
+  - "What is EBITDA? Answer in one paragraph."
+
+  # 2. Medium prompt, French: the RAG corpus will be partly in French.
+  - >-
+    Explique la différence entre le chiffre d'affaires, la marge brute et le résultat net
+    d'une entreprise, puis donne un exemple chiffré simple pour chacun.
+
+  # 3. Long prompt (~400 tokens of context): stresses prompt processing (prefill),
+  #    which is what a RAG query looks like.
+  - >-
+    Read the following excerpt from an annual report and summarise the three main risks.
+
+    "During the financial year the Group continued to operate in a volatile macroeconomic
+    environment. Revenue increased by 6.2% to 4.81 billion euros, driven by price increases
+    in the Industrial division and the full-year contribution of the two acquisitions completed
+    in the previous year. However, gross margin declined by 140 basis points, mainly because
+    energy and raw material costs rose faster than the Group could pass them on to customers.
+    The Group's net debt rose to 2.3 billion euros following the refinancing of the 2024 bond,
+    and the leverage ratio reached 2.9 times EBITDA, close to the 3.0 covenant threshold of the
+    syndicated credit facility. Approximately 38% of revenue is generated outside the euro area,
+    mainly in US dollars and Chinese renminbi, which exposes the Group to currency translation
+    effects; hedging covers around 60% of the forecast transactional exposure for the next
+    twelve months. In addition, the Group depends on a limited number of suppliers for
+    specialised semiconductor components: the three largest suppliers account for 71% of
+    purchases in this category, and a disruption at any of them could delay deliveries in the
+    Electronics division. Finally, new environmental regulations on industrial emissions will
+    require capital expenditure estimated between 180 and 240 million euros over the next four
+    years, which has not yet been fully reflected in the medium-term financial plan."

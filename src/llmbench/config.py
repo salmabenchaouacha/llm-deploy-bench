@@ -23,6 +23,7 @@ CONFIG_DIR = PROJECT_ROOT / "configs"
 DATA_DIR = PROJECT_ROOT / "data"
 RESULTS_DIR = PROJECT_ROOT / "results"
 DEFAULT_MODELS_CONFIG = CONFIG_DIR / "models.yaml"
+DEFAULT_BENCH_CONFIG = CONFIG_DIR / "bench.yaml"
 
 
 class ConfigError(Exception):
@@ -88,19 +89,34 @@ class Variant(StrictModel):
         None, description="Hugging Face repo of this variant; defaults to the model's hf_repo."
     )
     file: str | None = Field(None, description="File inside repo_id (required for GGUF).")
+    n_gpu_layers: int | None = Field(
+        None,
+        ge=0,
+        description="GGUF only: transformer layers offloaded to the GPU. None = all of them. "
+        "Lower it when the model does not fit in VRAM (the rest runs on CPU).",
+    )
     enabled: bool = True
 
     @property
     def backend(self) -> Backend:
         return self.quant.backend
 
+    @property
+    def is_gguf(self) -> bool:
+        return self.quant.backend is Backend.LLAMA_CPP
+
     @model_validator(mode="after")
-    def _check_file(self) -> Self:
-        is_gguf = self.quant.backend is Backend.LLAMA_CPP
-        if is_gguf and (self.file is None or not self.file.endswith(".gguf")):
-            raise ValueError(f"quant '{self.quant}' needs a 'file' ending in .gguf")
-        if not is_gguf and self.file is not None:
-            raise ValueError(f"quant '{self.quant}' loads a whole HF repo: remove 'file'")
+    def _check_gguf_fields(self) -> Self:
+        if self.is_gguf:
+            if self.repo_id is None:
+                raise ValueError(f"quant '{self.quant}' needs the 'repo_id' of the GGUF repo")
+            if self.file is None or not self.file.endswith(".gguf"):
+                raise ValueError(f"quant '{self.quant}' needs a 'file' ending in .gguf")
+        else:
+            if self.file is not None:
+                raise ValueError(f"quant '{self.quant}' loads a whole HF repo: remove 'file'")
+            if self.n_gpu_layers is not None:
+                raise ValueError("'n_gpu_layers' only applies to GGUF (llama.cpp) variants")
         return self
 
 
@@ -163,6 +179,37 @@ class ModelsConfig(StrictModel):
         ]
 
 
+class LlamaServerConfig(StrictModel):
+    """How the llama.cpp server container is started (used by the benchmark and serving)."""
+
+    image: str = "ghcr.io/ggml-org/llama.cpp:server-cuda"
+    use_gpu: bool = True
+    host: str = "127.0.0.1"
+    port: int = Field(8080, gt=0, lt=65536)
+    n_ctx: int = Field(4096, gt=0)
+    container_name: str = "llmbench-llama"
+    startup_timeout_s: float = Field(300.0, gt=0)
+    models_dir: Path = Path("~/.cache/llmbench/models")
+
+    @property
+    def models_path(self) -> Path:
+        return self.models_dir.expanduser()
+
+
+class BenchConfig(StrictModel):
+    """Root of ``configs/bench.yaml``: performance benchmark protocol."""
+
+    server: LlamaServerConfig = LlamaServerConfig()
+    warmup_runs: int = Field(1, ge=0)
+    runs: int = Field(3, ge=1, description="Measured repetitions of each prompt.")
+    max_new_tokens: int = Field(128, gt=0)
+    ignore_eos: bool = Field(
+        True, description="Force exactly max_new_tokens per run so tokens/s are comparable."
+    )
+    gpu_index: int = Field(0, ge=0)
+    prompts: list[str] = Field(..., min_length=1)
+
+
 def _read_yaml(path: Path) -> Any:
     if not path.is_file():
         raise ConfigError(f"config file not found: {path}")
@@ -178,6 +225,15 @@ def load_models_config(path: Path | str = DEFAULT_MODELS_CONFIG) -> ModelsConfig
     path = Path(path)
     try:
         return ModelsConfig.model_validate(_read_yaml(path))
+    except ValidationError as exc:
+        raise ConfigError(f"invalid config {path}:\n{exc}") from exc
+
+
+def load_bench_config(path: Path | str = DEFAULT_BENCH_CONFIG) -> BenchConfig:
+    """Load and validate ``bench.yaml``. Raises :class:`ConfigError` on any problem."""
+    path = Path(path)
+    try:
+        return BenchConfig.model_validate(_read_yaml(path))
     except ValidationError as exc:
         raise ConfigError(f"invalid config {path}:\n{exc}") from exc
 

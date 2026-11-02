@@ -14,6 +14,7 @@ from llmbench.config import (
     ConfigError,
     ModelsConfig,
     Quant,
+    load_bench_config,
     load_models_config,
 )
 
@@ -80,9 +81,29 @@ def test_out_of_range_generation_param_is_rejected(tmp_path: Path) -> None:
 
 def test_gguf_without_file_is_rejected(tmp_path: Path) -> None:
     data = _minimal()
-    data["models"]["tiny"]["variants"] = [{"quant": "gguf_q8_0"}]
+    data["models"]["tiny"]["variants"] = [{"quant": "gguf_q8_0", "repo_id": "org/x-GGUF"}]
     with pytest.raises(ConfigError, match=r"\.gguf"):
         load_models_config(_write(tmp_path, data))
+
+
+def test_gguf_without_repo_id_is_rejected(tmp_path: Path) -> None:
+    data = _minimal()
+    data["models"]["tiny"]["variants"] = [{"quant": "gguf_q8_0", "file": "x.gguf"}]
+    with pytest.raises(ConfigError, match="repo_id"):
+        load_models_config(_write(tmp_path, data))
+
+
+def test_n_gpu_layers_only_for_gguf(tmp_path: Path) -> None:
+    data = _minimal()
+    data["models"]["tiny"]["variants"] = [{"quant": "fp16", "n_gpu_layers": 10}]
+    with pytest.raises(ConfigError, match="n_gpu_layers"):
+        load_models_config(_write(tmp_path, data))
+
+
+def test_repository_bench_yaml_is_valid() -> None:
+    cfg = load_bench_config()
+    assert cfg.prompts and cfg.runs >= 1
+    assert cfg.server.models_path.is_absolute()  # "~" expanded
 
 
 def test_hf_variant_with_file_is_rejected(tmp_path: Path) -> None:
