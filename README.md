@@ -51,9 +51,11 @@ not fit is recorded with `error=cuda_oom`.
 
 ### RAG pipeline (Phase 2)
 
-Corpus: FY2025 results press releases listed in `configs/rag.yaml` (download each `url`
-into `data/raw/` — PDFs are not versioned). Pipeline: pypdf (layout mode, keeps table
-columns) → page-bounded chunks (~300 tokens, overlap) → `BAAI/bge-m3` embeddings served by
+Corpus: three results press releases listed in `configs/rag.yaml` — Airbus FY2025,
+TotalEnergies Q4/FY2025, Schneider Electric Q1 2025 (download each `url` into `data/raw/`;
+PDFs are not versioned). Pipeline: pypdf (layout mode, keeps table columns) →
+page-bounded chunks (~300 tokens, overlap) with a contextual header (`Company — Title`, so a
+bare table row still says which company it belongs to) → `BAAI/bge-m3` embeddings served by
 Text Embeddings Inference (CPU, keeps the GPU for the LLM) → Qdrant → top-k context → any
 model/quantization served by llama.cpp. The retriever is fixed, so every model receives the
 same context.
@@ -62,7 +64,7 @@ same context.
 make rag-up                     # Qdrant + embedding server (Docker)
 make ingest                     # PDFs -> chunks -> embeddings -> Qdrant -> results/rag/ingest.json
 make ask Q="How many commercial aircraft did Airbus deliver in 2025?"
-make ask Q="Quel est le chiffre d'affaires 2025 d'Orange ?" MODEL=llama3.2-3b
+make ask Q="Quel est le résultat net ajusté de TotalEnergies en 2025 ?" MODEL=llama3.2-3b
 uv run python -m llmbench.rag.ask "..." --retrieval-only   # inspect retrieved chunks only
 ```
 

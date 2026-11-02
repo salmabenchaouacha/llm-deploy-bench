@@ -16,6 +16,7 @@ import hashlib
 import json
 import statistics
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,9 @@ def parse_corpus(cfg: RagConfig) -> tuple[list[Chunk], list[dict[str, Any]]]:
         path = raw / doc.file
         pages = extract_pages(path, doc.doc_id)
         doc_chunks = chunk_pages(pages, cfg.chunking.max_chars, cfg.chunking.overlap_chars)
+        header = cfg.chunk_header.format(company=doc.company, title=doc.title, doc_id=doc.doc_id)
+        if header:
+            doc_chunks = [replace(c, text=f"{header}\n{c.text}") for c in doc_chunks]
         chunks.extend(doc_chunks)
         stats.append({
             "doc_id": doc.doc_id,
@@ -129,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "qdrant": {"image": cfg.qdrant.image, "collection": cfg.qdrant.collection},
         "chunking": cfg.chunking.model_dump(),
+        "chunk_header": cfg.chunk_header,
         "documents": doc_stats,
         "total_chunks": len(chunks),
         "chunk_chars_median": statistics.median(lengths),

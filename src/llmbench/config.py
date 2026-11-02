@@ -259,6 +259,10 @@ class RagConfig(StrictModel):
     raw_dir: Path = Path("data/raw")
     chunks_file: Path = Path("data/processed/chunks.jsonl")
     corpus: list[CorpusDoc] = Field(..., min_length=1)
+    chunk_header: str = Field(
+        "{company} — {title}",
+        description="Prepended to each chunk; fields: company, title, doc_id. Empty = none.",
+    )
     chunking: ChunkingConfig = ChunkingConfig()
     embedder: EmbedderConfig = EmbedderConfig()
     qdrant: QdrantConfig = QdrantConfig()
@@ -271,6 +275,10 @@ class RagConfig(StrictModel):
         ids = [d.doc_id for d in self.corpus]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate doc_id in corpus")
+        try:
+            self.chunk_header.format(company="", title="", doc_id="")
+        except (KeyError, IndexError) as exc:
+            raise ValueError(f"chunk_header: unknown field {exc}") from exc
         for field in ("{context}", "{question}"):
             if field not in self.prompt_template:
                 raise ValueError(f"prompt_template must contain {field}")

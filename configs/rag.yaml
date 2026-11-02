@@ -6,26 +6,31 @@
 raw_dir: data/raw                      # PDFs (git-ignored: documents belong to the companies)
 chunks_file: data/processed/chunks.jsonl
 
-# Corpus: FY2025 results press releases. Download each `url` into raw_dir/`file`.
+# Corpus: results press releases from three sectors (aerospace, energy, electrical equipment),
+# two report types (full year, quarterly). Download each `url` into raw_dir/`file`.
 corpus:
   - doc_id: airbus_fy2025
     file: airbus_fy2025_en.pdf
     company: Airbus
-    title: Airbus reports Full-Year (FY) 2025 results
+    title: Full-Year 2025 results
     lang: en
     url: https://airbus.com/en/newsroom/press-releases/2026-02-airbus-reports-full-year-fy-2025-results
-  - doc_id: schneider_fy2025
-    file: schneider_fy2025_en.pdf
+  - doc_id: totalenergies_fy2025
+    file: totalenergies_fy2025_en.pdf
+    company: TotalEnergies
+    title: Fourth quarter and full year 2025 results
+    lang: en
+    url: https://totalenergies.com/system/files/documents/totalenergies_pr-results-q4-2025_2026_en.pdf
+  - doc_id: schneider_q1_2025
+    file: schneider_q1_2025_en.pdf
     company: Schneider Electric
-    title: Full year 2025 results
+    title: First Quarter 2025 revenues
     lang: en
     url: https://www.se.com/ww/en/about-us/investor-relations/financial-results
-  - doc_id: orange_fy2025
-    file: orange_fy2025_en.pdf
-    company: Orange
-    title: Full year 2025 results
-    lang: en
-    url: https://www.orange.com/en/latest-consolidated-results
+
+# Prepended to every chunk before embedding (contextual chunk header): a table row rarely
+# names the company, so without it "Orange revenue" and "Airbus revenue" look alike.
+chunk_header: "{company} — {title}"
 
 chunking:
   max_chars: 1200       # ~300 tokens: small enough to be precise, large enough for a table row + header

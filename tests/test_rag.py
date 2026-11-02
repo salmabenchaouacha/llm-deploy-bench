@@ -61,7 +61,11 @@ def rag_cfg(tmp_path: Path, url: str = "http://x", **kw: object) -> RagConfig:
 
 def test_repository_rag_yaml_is_valid() -> None:
     cfg = load_rag_config()
-    assert {d.doc_id for d in cfg.corpus} >= {"airbus_fy2025", "schneider_fy2025", "orange_fy2025"}
+    assert {d.doc_id for d in cfg.corpus} >= {
+        "airbus_fy2025",
+        "totalenergies_fy2025",
+        "schneider_q1_2025",
+    }
     assert "{context}" in cfg.prompt_template
 
 
@@ -205,3 +209,31 @@ def test_chunks_file_is_jsonl(tmp_path: Path) -> None:
     write_chunks(chunks, tmp_path / "out" / "chunks.jsonl")
     row = json.loads((tmp_path / "out" / "chunks.jsonl").read_text().splitlines()[0])
     assert row["doc_id"] == "acme" and row["page"] == 1
+
+
+def test_contextual_header_lets_retrieval_tell_companies_apart(tmp_path: Path) -> None:
+    """Two reports with identical tables: only the header says which company is which."""
+    table = ["Revenue | 4,812 | 4,532", "Operating margin | 12.1% | 11.4%"]
+    make_pdf(tmp_path / "acme.pdf", [table])
+    make_pdf(tmp_path / "globex.pdf", [table])
+    base = rag_cfg(tmp_path)
+    doc = base.corpus[0]
+    corpus = [
+        doc.model_copy(update={"doc_id": "acme", "file": "acme.pdf", "company": "Acme"}),
+        doc.model_copy(update={"doc_id": "globex", "file": "globex.pdf", "company": "Globex"}),
+    ]
+    with fake_rag_services() as (url, _, _):
+        cfg = rag_cfg(tmp_path, url, corpus=corpus)
+        chunks, _ = parse_corpus(cfg)
+        assert chunks[0].text.startswith("Acme — ")
+        store, embedder = QdrantStore(cfg.qdrant), TEIEmbedder(cfg.embedder)
+        index_chunks(chunks, embedder, store)
+        top = Retriever(embedder, store, k=1).retrieve("Globex revenue")
+    assert top[0].doc_id == "globex"
+
+
+def test_chunk_header_with_unknown_field_is_rejected() -> None:
+    data = load_rag_config().model_dump()
+    data["chunk_header"] = "{ceo}"
+    with pytest.raises(ValueError, match="chunk_header"):
+        RagConfig.model_validate(data)
