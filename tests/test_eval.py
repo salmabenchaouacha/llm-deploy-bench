@@ -290,3 +290,28 @@ def test_repository_eval_yaml_is_valid() -> None:
     cfg = load_eval_config()
     assert ("qwen2.5-1.5b", "gguf_q4_k_m") in [(m, q.value) for m, q in cfg.variants]
     assert json.dumps(cfg.refusal_markers)
+
+
+def test_check_against_corpus_flags_typos_and_missing_pages() -> None:
+    from llmbench.eval.validate import check_against_corpus
+
+    pages = {("airbus_fy2025", 1): "793 commercial aircraft delivered; revenues € 73.4 billion"}
+    good = item(id="ok")
+    typo = item(id="typo", key_facts=[["739"]])
+    no_page = item(id="nopage", source_pages=[9])
+    rejected = item(id="rej", key_facts=[["1"]], status="rejected")
+    problems = check_against_corpus([good, typo, no_page, rejected], pages)
+    assert problems == [
+        "typo: none of ['739'] appears on pages [1]",
+        "nopage: source page not found in chunks ([9])",
+    ]
+
+
+def test_repository_eval_set_is_well_formed() -> None:
+    from llmbench.eval.dataset import load_items
+
+    items = load_items(Path("data/eval/questions.jsonl"))
+    assert len(items) >= 30
+    assert sum(not i.answerable for i in items) >= 3
+    docs = {i.doc_id for i in items if i.answerable}
+    assert docs == {"airbus_fy2025", "totalenergies_fy2025", "schneider_q1_2025"}

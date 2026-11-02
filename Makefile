@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-validate eval-smoke eval eval-report clean
+        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-check eval-validate eval-smoke eval eval-report clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -74,6 +74,9 @@ MODEL ?= qwen2.5-1.5b
 QUANT ?= gguf_q4_k_m
 ask: ## Ask the RAG pipeline: make ask Q="..." MODEL=qwen2.5-1.5b QUANT=gguf_q4_k_m
 	uv run python -m llmbench.rag.ask "$(Q)" --model $(MODEL) --quant $(QUANT)
+
+eval-check: ## Check every key fact of the eval set appears on its source page
+	uv run python -m llmbench.eval.validate --check-only
 
 eval-validate: ## Review draft evaluation questions by hand (validate / edit / reject)
 	uv run python -m llmbench.eval.validate

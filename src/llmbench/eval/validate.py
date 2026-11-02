@@ -19,6 +19,7 @@ from pathlib import Path
 
 from llmbench.config import DEFAULT_EVAL_CONFIG, load_eval_config
 from llmbench.eval.dataset import EvalItem, Status, load_items, save_items
+from llmbench.eval.metrics import contains_fact
 
 Prompt = Callable[[str], str]
 
@@ -31,6 +32,27 @@ def load_pages(chunks_file: Path) -> dict[tuple[str, int], str]:
             c = json.loads(line)
             pages.setdefault((c["doc_id"], c["page"]), []).append(c["text"])
     return {k: "\n".join(v) for k, v in pages.items()}
+
+
+def check_against_corpus(items: list[EvalItem], pages: dict[tuple[str, int], str]) -> list[str]:
+    """Problems found by checking every key fact against the text of its source pages.
+
+    Catches typos in drafted figures before a human even looks at the item: a fact that is
+    not on the source page cannot be expected from a model that only sees retrieved pages.
+    """
+    problems = []
+    for item in items:
+        if not item.answerable or item.status is Status.REJECTED:
+            continue
+        texts = [pages.get((item.doc_id or "", p)) for p in item.source_pages]
+        if any(t is None for t in texts):
+            problems.append(f"{item.id}: source page not found in chunks ({item.source_pages})")
+            continue
+        joined = "\n".join(t for t in texts if t)
+        for group in item.key_facts:
+            if not any(contains_fact(joined, alt) for alt in group):
+                problems.append(f"{item.id}: none of {group} appears on pages {item.source_pages}")
+    return problems
 
 
 def render(item: EvalItem, pages: dict[tuple[str, int], str], max_chars: int = 1800) -> str:
@@ -116,10 +138,22 @@ def review(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate evaluation questions by hand.")
     parser.add_argument("--eval-config", default=DEFAULT_EVAL_CONFIG)
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="only check key facts against the source pages, no review",
+    )
     args = parser.parse_args(argv)
     cfg = load_eval_config(args.eval_config)
     path = cfg.resolve(cfg.dataset)
     items = load_items(path)
+    pages = load_pages(cfg.resolve(cfg.chunks_file))
+    problems = check_against_corpus(items, pages)
+    for problem in problems:
+        print(f"! {problem}")
+    if args.check_only:
+        print(f"{len(problems)} problem(s) in {len(items)} items")
+        return 1 if problems else 0
     counts = review(
         items, load_pages(cfg.resolve(cfg.chunks_file)), lambda its: save_items(its, path)
     )
