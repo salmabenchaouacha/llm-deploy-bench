@@ -56,7 +56,7 @@ def test_select_all_targets_are_enabled_gguf() -> None:
     targets = select_targets(load_models_config(), None, None, None)
     assert targets and all(t.variant.is_gguf and t.variant.enabled for t in targets)
     mistral = [t for t in targets if t.model_id == "mistral-7b"]
-    assert [t.n_gpu_layers for t in mistral] == [20]  # partial offload from models.yaml
+    assert [t.n_gpu_layers for t in mistral] == [32]  # value chosen from the offload sweep
 
 
 def test_select_sweep_creates_one_target_per_layer_count() -> None:

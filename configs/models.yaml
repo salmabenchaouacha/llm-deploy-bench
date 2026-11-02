@@ -6,8 +6,8 @@
 #   - fp16 / bnb_* / awq run through Transformers                      -> V2 (enabled: false).
 #     fp16 will be measured on a Kaggle T4: 1.5B in fp16 (~3.1 GB) + KV cache does not fit in 4 GB.
 #
-# n_gpu_layers: layers offloaded to the GPU (omitted = all). Only Mistral-7B needs a
-# partial offload: Q4_K_M weighs ~4.4 GB, more than the whole card.
+# n_gpu_layers: layers offloaded to the GPU (omitted = all). Mistral-7B Q4_K_M (~4.4 GB)
+# is larger than the card: its value comes from the offload sweep.
 
 # Shared decoding params: identical for every model so the comparison is fair.
 # temperature 0 = greedy decoding -> deterministic, reproducible outputs.
@@ -77,8 +77,10 @@ models:
       - quant: gguf_q4_k_m
         repo_id: bartowski/Mistral-7B-Instruct-v0.3-GGUF
         file: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
-        # Starting point (~0.13 GB/layer x 20 + KV cache + buffers ≈ 3.2 GB).
-        # `make bench-sweep` measures 0 -> 32 layers to find the real limit (OOM is recorded).
-        n_gpu_layers: 20
+        # Chosen from `make bench-sweep` (results/perf/report.md): all 32 layers give the
+        # best decode speed on the RTX 3050 4 GB even though the card is full — the Windows
+        # driver spills to shared memory (VRAM reported as a lower bound). Trade-off: the
+        # spill doubles time-to-first-token on long prompts versus 24 layers.
+        n_gpu_layers: 32
       - quant: awq_int4   # cut: needs > 4 GB VRAM
         enabled: false
