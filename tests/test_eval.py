@@ -353,3 +353,31 @@ def test_done_variants_only_counts_same_dataset_without_error(tmp_path: Path) ->
     )
     assert done_variants(tmp_path / "summary.csv", "h1") == {("a", "q4")}
     assert done_variants(tmp_path / "missing.csv", "h1") == set()
+
+
+def test_failed_question_is_recorded_not_fatal() -> None:
+    from llmbench.rag.pipeline import RagAnswer
+    from llmbench.serving.client import StreamError
+
+    class Flaky:
+        def answer_from_hits(self, question: str, hits: list[Hit], url: str) -> RagAnswer:
+            if question.startswith("boom"):
+                raise StreamError("stream ended without any generated content")
+            return RagAnswer(question, "793 aircraft.", hits, 0.0, 10.0, 20.0, 3, 50)
+
+    items = [item(id="a", question="boom question"), item(id="b", question="ok question")]
+    hits = {"a": [hit("airbus_fy2025", 1)], "b": [hit("airbus_fy2025", 1)]}
+    records = evaluate(items, Flaky(), "u", ["do not contain"], hits)  # type: ignore[arg-type]
+    assert [r.answer for r in records] == ["", "793 aircraft."]
+    assert records[0].error.startswith("stream ended") and not records[0].score.correct
+    assert records[0].score.rank == 1  # retrieval is still scored
+    assert aggregate(records)["answer_accuracy"] == 0.5
+
+
+def test_stream_chat_allow_empty_returns_empty_answer() -> None:
+    from llmbench.serving.client import stream_chat
+    from tests.fake_llama_server import FakeState, fake_llama_server
+
+    with fake_llama_server(FakeState([])) as url:
+        res = stream_chat(url, [{"role": "user", "content": "x"}], max_tokens=5, allow_empty=True)
+    assert res.text == "" and res.n_chunks == 0 and res.ttft_s == res.total_s

@@ -40,6 +40,7 @@ from llmbench.config import (
 )
 from llmbench.eval.dataset import EvalItem, Status, dataset_hash, load_items
 from llmbench.eval.metrics import ItemScore, score_item
+from llmbench.http import HttpError
 from llmbench.log import get_logger
 from llmbench.models.bench import git_commit, percentile
 from llmbench.models.hub import ensure_gguf, gguf_relpath
@@ -47,6 +48,7 @@ from llmbench.rag.embed import TEIEmbedder
 from llmbench.rag.pipeline import RagPipeline, Retriever
 from llmbench.rag.services import wait_for_rag_services
 from llmbench.rag.store import Hit, QdrantStore
+from llmbench.serving.client import StreamError
 from llmbench.serving.llama_server import DockerRunError, LlamaServer, ServerStartError
 
 log = get_logger(__name__)
@@ -92,6 +94,7 @@ class AnswerRecord:
     ttft_ms: float
     total_ms: float
     gen_tokens: int | None
+    error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -112,9 +115,18 @@ def write_retrieval(hits: dict[str, list[Hit]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for item_id, item_hits in hits.items():
-            row = {"item_id": item_id,
-                   "hits": [{"doc_id": h.doc_id, "page": h.page, "score": round(h.score, 4),
-                             "chunk_id": h.chunk_id} for h in item_hits]}  # fmt: skip
+            row = {
+                "item_id": item_id,
+                "hits": [
+                    {
+                        "doc_id": h.doc_id,
+                        "page": h.page,
+                        "score": round(h.score, 4),
+                        "chunk_id": h.chunk_id,
+                    }
+                    for h in item_hits
+                ],
+            }
             fh.write(json.dumps(row) + "\n")
 
 
@@ -139,10 +151,32 @@ def evaluate(
 ) -> list[AnswerRecord]:
     records = []
     for n, item in enumerate(items, 1):
-        if hits_by_item is not None:
-            ans = pipeline.answer_from_hits(item.question, hits_by_item[item.id], llm_base_url)
-        else:
-            ans = pipeline.answer(item.question, llm_base_url)
+        hits = hits_by_item[item.id] if hits_by_item is not None else []
+        try:
+            if hits_by_item is not None:
+                ans = pipeline.answer_from_hits(item.question, hits, llm_base_url)
+            else:
+                ans = pipeline.answer(item.question, llm_base_url)
+        except (StreamError, HttpError) as exc:
+            # One failed request must not discard a long run: record it as a wrong answer.
+            log.warning("question failed", extra={"id": item.id, "error": str(exc)[:200]})
+            records.append(
+                AnswerRecord(
+                    item_id=item.id,
+                    category=item.category,
+                    answerable=item.answerable,
+                    question=item.question,
+                    answer="",
+                    reference_answer=item.reference_answer,
+                    retrieved=[f"{h.doc_id} p.{h.page}" for h in hits],
+                    score=score_item(item, "", hits, refusal_markers),
+                    ttft_ms=math.nan,
+                    total_ms=math.nan,
+                    gen_tokens=None,
+                    error=str(exc)[:300],
+                )
+            )
+            continue
         score = score_item(item, ans.answer, ans.hits, refusal_markers)
         records.append(
             AnswerRecord(
@@ -165,6 +199,7 @@ def evaluate(
                 "n": f"{n}/{len(items)}",
                 "id": item.id,
                 "correct": score.correct or score.correct_refusal,
+                "empty": not ans.answer,
             },
         )
     return records
@@ -242,8 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also use unvalidated items (debug only, not for reporting)",
     )
     parser.add_argument("--limit", type=int, help="first N items only (smoke test)")
-    parser.add_argument("--resume", action="store_true",
-                        help="skip variants already evaluated on this dataset version")  # fmt: skip
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip variants already evaluated on this dataset version",
+    )
     parser.add_argument("--out-dir", type=Path, default=EVAL_DIR)
     parser.add_argument("--eval-config", default=DEFAULT_EVAL_CONFIG)
     parser.add_argument("--rag-config", default=DEFAULT_RAG_CONFIG)

@@ -61,6 +61,7 @@ def generate(base_url: str, prompt: str, max_tokens: int) -> StreamResult:
         temperature=0.0,
         seed=42,
         cache_prompt=False,  # fair latency: every question pays its own prefill
+        allow_empty=True,  # an immediate EOS is an (empty, wrong) answer, not a crash
     )
 
 

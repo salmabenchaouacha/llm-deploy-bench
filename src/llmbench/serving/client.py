@@ -52,6 +52,7 @@ def stream_chat(
     top_p: float = 1.0,
     seed: int | None = 42,
     ignore_eos: bool = False,
+    allow_empty: bool = False,
     cache_prompt: bool | None = None,
     timeout: float = 600.0,
     clock: Callable[[], float] = time.perf_counter,
@@ -113,7 +114,9 @@ def stream_chat(
     total = clock() - start
 
     if ttft is None:
-        raise StreamError("stream ended without any generated content")
+        if not allow_empty:
+            raise StreamError("stream ended without any generated content")
+        ttft = total  # the model stopped immediately (EOS as first token): an empty answer
     return StreamResult(
         text="".join(parts),
         ttft_s=ttft,
