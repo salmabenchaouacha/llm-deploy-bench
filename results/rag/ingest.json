@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-11-02T18:32:44+00:00",
+  "git_commit": "c376e1d",
+  "embedder": {
+    "model_id": "BAAI/bge-m3",
+    "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9",
+    "dim": 1024
+  },
+  "qdrant": {
+    "image": "qdrant/qdrant:v1.17.1",
+    "collection": "financial_reports"
+  },
+  "chunking": {
+    "max_chars": 1200,
+    "overlap_chars": 150
+  },
+  "documents": [
+    {
+      "doc_id": "airbus_fy2025",
+      "file": "airbus_fy2025_en.pdf",
+      "sha256": "21f849df5646b6b57e006827581768016e3b0995ec8d95d096f573a7886f8610",
+      "pages_with_text": 10,
+      "chunks": 24,
+      "chars": 20972
+    },
+    {
+      "doc_id": "schneider_fy2025",
+      "file": "schneider_fy2025_en.pdf",
+      "sha256": "ce00d5273a7ef84cb57e483e42350a62bc3088884409a2e8bc80e10f20937702",
+      "pages_with_text": 12,
+      "chunks": 31,
+      "chars": 29471
+    },
+    {
+      "doc_id": "orange_fy2025",
+      "file": "orange_fy2025_en.pdf",
+      "sha256": "e339b5d433a3a525de66b7465354a918f914bbd254fcbb0e0450937fc88473a7",
+      "pages_with_text": 49,
+      "chunks": 138,
+      "chars": 125934
+    }
+  ],
+  "total_chunks": 193,
+  "chunk_chars_median": 1124,
+  "embed_seconds": 218.05,
+  "embed_chunks_per_s": 0.89
+}
