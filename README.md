@@ -68,6 +68,27 @@ make ask Q="Quel est le résultat net ajusté de TotalEnergies en 2025 ?" MODEL=
 uv run python -m llmbench.rag.ask "..." --retrieval-only   # inspect retrieved chunks only
 ```
 
+### Quality evaluation (Phase 3)
+
+Evaluation set `data/eval/questions.jsonl`: questions drafted from the corpus, then each one
+reviewed by hand (`make eval-validate`: validate / edit / reject, source page shown). Only
+validated items are scored. Metrics are deterministic (no LLM judge, reproducible, free):
+
+| Metric | Meaning |
+|---|---|
+| retrieval hit@k, MRR | a chunk from the source page is among the top-k retrieved |
+| answer accuracy | every key fact (exact figure, normalised: `15,587` = `15587`, `15,6` = `15.6`) is in the answer |
+| fact recall | share of key facts found |
+| hallucination rate | unanswerable questions answered anyway |
+| false refusal rate | answerable questions the model refused |
+
+```bash
+make eval-validate   # human review of the drafted questions
+make eval-smoke      # 3 questions, 1 model: checks the whole chain
+make eval            # every variant of configs/eval.yaml -> results/eval/summary.csv + answers/
+make eval-report     # results/eval/report.md: accuracy table + quality-vs-speed figure
+```
+
 ## Project layout
 
 | Path | Content |

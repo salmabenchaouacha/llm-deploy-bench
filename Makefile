@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask clean
+        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-validate eval-smoke eval eval-report clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -74,6 +74,19 @@ MODEL ?= qwen2.5-1.5b
 QUANT ?= gguf_q4_k_m
 ask: ## Ask the RAG pipeline: make ask Q="..." MODEL=qwen2.5-1.5b QUANT=gguf_q4_k_m
 	uv run python -m llmbench.rag.ask "$(Q)" --model $(MODEL) --quant $(QUANT)
+
+eval-validate: ## Review draft evaluation questions by hand (validate / edit / reject)
+	uv run python -m llmbench.eval.validate
+
+eval-smoke: ## Quick end-to-end check: 3 questions, one model, drafts allowed (not reported)
+	uv run python -m llmbench.eval.run --model qwen2.5-0.5b --include-drafts --limit 3 \
+		--out-dir /tmp/llmbench-eval-smoke
+
+eval: ## RAG quality on validated questions, every variant of configs/eval.yaml -> results/eval/
+	uv run python -m llmbench.eval.run --all
+
+eval-report: ## Quality table + quality-vs-speed figure -> results/eval/report.md
+	uv run python -m llmbench.eval.report
 
 clean: ## Remove caches (keeps .venv, data and results)
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov
