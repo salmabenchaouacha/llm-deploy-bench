@@ -49,6 +49,23 @@ time-to-first-token (client side), decode tokens/s, prefill tokens/s (server tim
 peak VRAM (NVML, device-level minus baseline) and peak container RAM. A variant that does
 not fit is recorded with `error=cuda_oom`.
 
+### RAG pipeline (Phase 2)
+
+Corpus: FY2025 results press releases listed in `configs/rag.yaml` (download each `url`
+into `data/raw/` — PDFs are not versioned). Pipeline: pypdf (layout mode, keeps table
+columns) → page-bounded chunks (~300 tokens, overlap) → `BAAI/bge-m3` embeddings served by
+Text Embeddings Inference (CPU, keeps the GPU for the LLM) → Qdrant → top-k context → any
+model/quantization served by llama.cpp. The retriever is fixed, so every model receives the
+same context.
+
+```bash
+make rag-up                     # Qdrant + embedding server (Docker)
+make ingest                     # PDFs -> chunks -> embeddings -> Qdrant -> results/rag/ingest.json
+make ask Q="What was TotalEnergies' adjusted net income in 2025?"
+make ask Q="Quel est le chiffre d'affaires 2025 d'Orange ?" MODEL=llama3.2-3b
+uv run python -m llmbench.rag.ask "..." --retrieval-only   # inspect retrieved chunks only
+```
+
 ## Project layout
 
 | Path | Content |

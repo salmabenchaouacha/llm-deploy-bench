@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep report clean
+        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -59,6 +59,21 @@ bench-sweep: ## Mistral-7B GPU offload sweep (layers on GPU vs speed) -> results
 
 report: ## Tables + figures from results/perf/summary.csv -> results/perf/report.md
 	uv run python -m llmbench.models.report
+
+rag-up: ## Start Qdrant + embedding server (first start downloads bge-m3, ~2.3 GB)
+	docker compose up -d qdrant embedder
+
+rag-down: ## Stop Qdrant + embedding server (index kept in a Docker volume)
+	docker compose stop qdrant embedder
+
+ingest: ## Parse data/raw/*.pdf, chunk, embed and index into Qdrant -> results/rag/ingest.json
+	uv run python -m llmbench.rag.ingest
+
+Q ?= What was the net income in 2025?
+MODEL ?= qwen2.5-1.5b
+QUANT ?= gguf_q4_k_m
+ask: ## Ask the RAG pipeline: make ask Q="..." MODEL=qwen2.5-1.5b QUANT=gguf_q4_k_m
+	uv run python -m llmbench.rag.ask "$(Q)" --model $(MODEL) --quant $(QUANT)
 
 clean: ## Remove caches (keeps .venv, data and results)
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

@@ -1,0 +1,30 @@
+# Long-running services of the platform. The LLM itself (llama-server) is started by the
+# Python code per model/quantization; it joins this file as the `llm` service in Phase 4.
+#
+#   make rag-up     # start qdrant + embedder
+#   make rag-down   # stop them (data kept in named volumes)
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    ports:
+      - "127.0.0.1:6333:6333"     # REST API + dashboard (http://localhost:6333/dashboard)
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  embedder:
+    # Hugging Face Text Embeddings Inference, CPU build: keeps the 4 GB GPU for the LLM.
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    command: ["--model-id", "BAAI/bge-m3"]
+    ports:
+      - "127.0.0.1:8093:80"
+    volumes:
+      - tei_cache:/data            # model weights downloaded on first start (~2.3 GB)
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  tei_cache:
