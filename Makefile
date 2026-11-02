@@ -2,8 +2,10 @@
 # Requires uv (https://docs.astral.sh/uv/). On Windows, run from WSL2.
 
 .DEFAULT_GOAL := help
-.PHONY: help install install-gguf install-gpu lint format typecheck test test-all \
-        check precommit config clean
+.PHONY: help install install-gpu lint format typecheck test test-all check precommit \
+        config gpu-check download bench bench-sweep clean
+
+LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -12,9 +14,6 @@ help: ## Show this help
 install: ## Create .venv with core + dev deps and install git hooks
 	uv sync
 	uv run pre-commit install
-
-install-gguf: ## Add the llama.cpp backend (CPU build)
-	uv sync --extra gguf
 
 install-gpu: ## Add the Transformers/bitsandbytes backend (NVIDIA GPU)
 	uv sync --extra gpu
@@ -43,6 +42,20 @@ precommit: ## Run all pre-commit hooks on every file
 
 config: ## Validate configs/models.yaml and list the variants
 	uv run python -m llmbench.config
+
+gpu-check: ## Check that Docker containers can see the NVIDIA GPU
+	docker pull $(LLAMA_IMAGE)
+	docker run --rm --gpus all --entrypoint nvidia-smi $(LLAMA_IMAGE)
+
+download: ## Download every enabled GGUF model (~12 GB, cached outside the repo)
+	uv run python -m llmbench.models.hub --all
+
+bench: ## Performance benchmark of every enabled GGUF variant -> results/perf/
+	uv run python -m llmbench.models.bench --all
+
+bench-sweep: ## Mistral-7B GPU offload sweep (layers on GPU vs speed) -> results/perf/
+	uv run python -m llmbench.models.bench --model mistral-7b --quant gguf_q4_k_m \
+		--n-gpu-layers 0 8 16 20 24 28 32
 
 clean: ## Remove caches (keeps .venv, data and results)
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

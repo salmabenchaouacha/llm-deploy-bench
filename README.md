@@ -21,19 +21,32 @@ _TODO — generated from `results/`_
 
 ## Quickstart
 
-Requirements: Python 3.11, [uv](https://docs.astral.sh/uv/), Git. On Windows, use WSL2.
+Requirements: Python 3.11, [uv](https://docs.astral.sh/uv/), Git, Docker with NVIDIA GPU
+support. On Windows, use WSL2 + Docker Desktop (Settings → Resources → WSL integration).
 
 ```bash
 make install        # core + dev dependencies
 make check          # lint + type-check + tests
 ```
 
-Optional backends are installed per need:
+### Performance benchmark (Phase 1)
+
+GGUF models run in the official `llama.cpp` server image (CUDA build), the same engine
+used for serving. Weights are cached in `~/.cache/llmbench/models` (outside the repo).
 
 ```bash
-uv sync --extra gguf   # llama.cpp (CPU or GPU)
-uv sync --extra gpu    # bitsandbytes / transformers on NVIDIA GPU
+make gpu-check      # the container must list the GPU
+make download       # ~12 GB of GGUF files
+make bench          # every enabled variant -> results/perf/summary.csv + runs.jsonl
+make bench-sweep    # Mistral-7B: layers offloaded to GPU vs speed / VRAM
 ```
+
+Protocol (`configs/bench.yaml`): 3 prompts (short, French, long RAG-like context),
+1 warm-up + 3 repetitions each, greedy decoding, exactly 128 generated tokens
+(`ignore_eos`), prompt cache disabled. Measured per variant: file size, load time,
+time-to-first-token (client side), decode tokens/s, prefill tokens/s (server timings),
+peak VRAM (NVML, device-level minus baseline) and peak container RAM. A variant that does
+not fit is recorded with `error=cuda_oom`.
 
 ## Project layout
 
