@@ -195,13 +195,16 @@ def main(argv: list[str] | None = None) -> int:
     meta = {
         "session_id": session, "git_commit": git_commit(), "scenario": args.scenario,
         "duration_s": args.duration, "model": served_model(args.host),
-        "llm_slots": llm_slots(args.llm_url), "gpu_name": gpu_info().get("name", ""),
+        "llm_slots": llm_slots(args.llm_url), "gpu_name": gpu_info().get("gpu_name", ""),
         "max_tokens": args.max_tokens if args.scenario == "chat" else "",
     }  # fmt: skip
     raw_dir = args.out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     for users in args.users:
         records_path = raw_dir / f"{session}_{args.scenario}_u{users}.jsonl"
+        # A service restarted by Docker (e.g. the embedder killed for lack of RAM) must be
+        # back before the level starts, or the level only measures fast 503 errors.
+        wait_healthy(args.host, timeout_s=600)
         log.info("load level", extra={"scenario": args.scenario, "users": users})
         try:
             sampler: PeakSampler | None = PeakSampler(nvml_used_mib_reader(), name="vram")
@@ -218,6 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         row = {**meta, **stats, "users": users, "vram_peak_mib": vram,
                "timestamp": datetime.now(UTC).isoformat(timespec="seconds")}  # fmt: skip
         append_summary(row, args.out_dir / "summary.csv")
+        if stats.get("failures", 0) > max(10, stats.get("requests", 0) // 10):
+            print(f"WARNING: {stats['failures']} failed requests at {users} users: a service "
+                  "probably crashed. Check `docker compose ps` (an 'Up X seconds' service "
+                  "restarted) and `free -h`, then rerun this scenario.")  # fmt: skip
         print(f"-> {args.scenario} {users:>2} users: {stats.get('requests', 0)} ok / "
               f"{stats.get('failures', 0)} failed, "
               f"{row.get('throughput_tok_s', math.nan):.1f} tok/s total, "
