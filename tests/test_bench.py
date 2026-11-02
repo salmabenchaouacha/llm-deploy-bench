@@ -175,3 +175,30 @@ def test_real_tiny_model_benchmark(tmp_path: Path) -> None:
     assert row["error"] == "" and float(row["decode_tok_s_p50"]) > 0
     first = json.loads((tmp_path / "runs.jsonl").read_text().splitlines()[0])
     assert first["gen_tokens"] > 0
+
+
+# ---------------------------------------------------------------- error handling
+
+
+def test_cli_unknown_model_prints_clean_error(capsys: pytest.CaptureFixture[str]) -> None:
+    from llmbench.models.bench import main
+
+    assert main(["--model", "quen2.5-0.5b", "--dry-run"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: model 'quen2.5-0.5b' not configured")
+    assert "Traceback" not in err
+
+
+def test_docker_run_failure_is_not_recorded_as_a_result(tmp_path: Path) -> None:
+    from llmbench.serving.llama_server import DockerRunError
+
+    @contextmanager
+    def docker_broken(target: Target, c: BenchConfig) -> Iterator[_FakeServer]:
+        raise DockerRunError("docker run failed (exit 125): port is already allocated")
+        yield  # pragma: no cover
+
+    with pytest.raises(DockerRunError, match="port"):
+        run_target(
+            _target(), _bench_cfg(tmp_path), session={"session_id": "s3"},
+            ensure_model=_fake_model, server_factory=docker_broken,
+        )  # fmt: skip

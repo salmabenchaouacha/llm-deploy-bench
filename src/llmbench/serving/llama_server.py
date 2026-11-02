@@ -37,6 +37,14 @@ class ServerStartError(RuntimeError):
     """The container exited or never became healthy. Message includes its logs."""
 
 
+class DockerRunError(RuntimeError):
+    """``docker run`` itself failed (port taken, bad mount, GPU not exposed...).
+
+    An environment problem, not a property of the model: callers should stop, not
+    record it as a benchmark result.
+    """
+
+
 @dataclass(frozen=True)
 class LlamaServerSpec:
     image: str
@@ -151,7 +159,12 @@ class LlamaServer:
         _docker("rm", "-f", self.spec.container_name, check=False)  # leftover from a crash
         cmd = self.spec.docker_run_command()
         log.info("starting llama-server", extra={"cmd": " ".join(cmd)})
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        run = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if run.returncode != 0:  # docker itself failed: port taken, bad mount, no GPU...
+            self.stop()
+            raise DockerRunError(
+                f"docker run failed (exit {run.returncode}): {run.stderr.strip() or run.stdout}"
+            )
         try:
             self.load_time_s = wait_for_health(
                 f"{self.base_url}/health", self.startup_timeout_s, is_alive=self._is_running

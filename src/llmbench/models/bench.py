@@ -27,6 +27,7 @@ import json
 import math
 import statistics
 import subprocess
+import sys
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager
@@ -41,6 +42,7 @@ from llmbench.config import (
     PROJECT_ROOT,
     RESULTS_DIR,
     BenchConfig,
+    ConfigError,
     ModelsConfig,
     Variant,
     load_bench_config,
@@ -56,7 +58,7 @@ from llmbench.monitoring.memory import (
     nvml_used_mib_reader,
 )
 from llmbench.serving.client import StreamResult, count_tokens, stream_chat
-from llmbench.serving.llama_server import LlamaServer, ServerStartError
+from llmbench.serving.llama_server import DockerRunError, LlamaServer, ServerStartError
 
 log = get_logger(__name__)
 
@@ -378,11 +380,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="list targets and exit")
     args = parser.parse_args(argv)
 
-    models_cfg = load_models_config(args.models_config)
-    bench_cfg = load_bench_config(args.bench_config)
+    try:
+        models_cfg = load_models_config(args.models_config)
+        bench_cfg = load_bench_config(args.bench_config)
+        targets = select_targets(models_cfg, args.model, args.quant, args.n_gpu_layers)
+    except (ConfigError, KeyError) as exc:
+        print(f"ERROR: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 2
     if args.runs:
         bench_cfg = bench_cfg.model_copy(update={"runs": args.runs})
-    targets = select_targets(models_cfg, args.model, args.quant, args.n_gpu_layers)
 
     for t in targets:
         ngl = "all" if t.n_gpu_layers is None else t.n_gpu_layers
@@ -404,9 +410,14 @@ def main(argv: list[str] | None = None) -> int:
 
     failures = 0
     for target in targets:
-        records, summary = run_target(
-            target, bench_cfg, session=session, vram_reader=vram_reader, ram_reader=ram_reader
-        )
+        try:
+            records, summary = run_target(
+                target, bench_cfg, session=session, vram_reader=vram_reader, ram_reader=ram_reader
+            )
+        except DockerRunError as exc:
+            print(f"ERROR: {exc}\nNothing was written for this target. Fix Docker and rerun.",
+                  file=sys.stderr)  # fmt: skip
+            return 3
         append_results(records, summary, args.results_dir)
         failures += bool(summary.get("error"))
         print(
