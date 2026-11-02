@@ -38,6 +38,13 @@ GPU_VRAM_GIB = 4.0  # RTX 3050 Laptop (override with --vram-limit-gb)
 INK, INK_2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]  # first 3 slots: safe for all-pairs (scatter)
 OOM_COLOR = "#e34948"
+SATURATION = 0.95  # peak device memory above 95% of the card = saturated
+SATURATION_NOTE = (
+    "¹ VRAM saturated: NVML only reports physical GPU memory. Once the card is full, the "
+    "Windows NVIDIA driver can spill allocations to shared system memory (sysmem fallback) "
+    "instead of failing with out-of-memory, so these VRAM values are a lower bound and part "
+    "of the model is read over PCIe."
+)
 
 
 # ---------------------------------------------------------------- data
@@ -52,6 +59,7 @@ class Row:
     timestamp: str
     file_size_mb: float
     vram_model_mib: float
+    vram_peak_mib: float
     ttft_ms_p50: float
     ttft_long_ms_p50: float
     decode_p50: float
@@ -66,6 +74,10 @@ class Row:
         quant = self.quant.removeprefix("gguf_").upper()
         suffix = "" if self.ngl == "all" else f" ({self.ngl} GPU layers)"
         return f"{self.model} {quant}{suffix}"
+
+    def saturated(self, limit_gib: float) -> bool:
+        """Card (almost) full: NVML only sees physical VRAM, so the value is a lower bound."""
+        return self.vram_peak_mib >= SATURATION * limit_gib * 1024
 
     @property
     def ngl_int(self) -> int | None:
@@ -95,6 +107,7 @@ def load_rows(csv_path: Path) -> list[Row]:
             timestamp=r["timestamp"],
             file_size_mb=_f(r["file_size_mb"]),
             vram_model_mib=_f(r["vram_model_mib"]),
+            vram_peak_mib=_f(r["vram_peak_mib"]),
             ttft_ms_p50=_f(r["ttft_ms_p50"]),
             ttft_long_ms_p50=_f(r["ttft_long_ms_p50"]),
             decode_p50=_f(r["decode_tok_s_p50"]),
@@ -209,6 +222,23 @@ def plot_sweep(rows: list[Row], out: Path, vram_limit_gib: float) -> None:
     ax_vram.axhline(vram_limit_gib, color=INK_2, linestyle="--", linewidth=1)
     ax_vram.text(0, vram_limit_gib, f"GPU limit {vram_limit_gib:.0f} GB", color=INK_2,
                  fontsize=8, va="bottom")  # fmt: skip
+    saturated = [r for r in ok if r.saturated(vram_limit_gib)]
+    if saturated:  # hollow markers: measured value is only a lower bound
+        ax_vram.scatter(
+            [r.ngl_int for r in saturated],
+            [r.vram_model_mib / 1024 for r in saturated],
+            s=60,
+            facecolor=SURFACE,
+            edgecolor=SERIES[0],
+            linewidth=2,
+            zorder=4,
+        )
+        first = saturated[0]
+        ax_vram.annotate("card full: real use is higher\n(spill to shared memory)",
+                         (first.ngl_int, first.vram_model_mib / 1024),
+                         textcoords="axes fraction", xytext=(0.55, 0.3), fontsize=8,
+                         color=INK_2, arrowprops={"arrowstyle": "-", "color": INK_2,
+                                                  "linewidth": 0.8})  # fmt: skip
     for r in ok:
         ax_speed.annotate(f"{r.decode_p50:.1f}", (r.ngl_int, r.decode_p50),
                           textcoords="offset points", xytext=(0, 8), ha="center",
@@ -239,7 +269,11 @@ def _n(value: float, digits: int = 0) -> str:
     return "—" if math.isnan(value) else f"{value:,.{digits}f}"
 
 
-def comparison_table(rows: list[Row]) -> str:
+def _vram(r: Row, limit_gib: float) -> str:
+    return f"≥ {_n(r.vram_model_mib)} ¹" if r.saturated(limit_gib) else _n(r.vram_model_mib)
+
+
+def comparison_table(rows: list[Row], limit_gib: float = GPU_VRAM_GIB) -> str:
     head = (
         "| Model | Quant | GPU layers | File (GB) | VRAM (MiB) | TTFT short p50 (ms) "
         "| TTFT long p50 (ms) | Prefill (tok/s) | Decode (tok/s) |\n"
@@ -247,7 +281,7 @@ def comparison_table(rows: list[Row]) -> str:
     )
     lines = [
         f"| {r.model} | {r.quant.removeprefix('gguf_').upper()} | {r.ngl} "
-        f"| {_n(r.file_size_mb / 1024, 2)} | {_n(r.vram_model_mib)} | {_n(r.ttft_ms_p50)} "
+        f"| {_n(r.file_size_mb / 1024, 2)} | {_vram(r, limit_gib)} | {_n(r.ttft_ms_p50)} "
         f"| {_n(r.ttft_long_ms_p50)} | {_n(r.prefill_p50)} "
         f"| **{_n(r.decode_p50, 1)}** ± {_n(r.decode_std, 1)} |"
         for r in rows
@@ -255,13 +289,13 @@ def comparison_table(rows: list[Row]) -> str:
     return head + "\n".join(lines)
 
 
-def sweep_table(rows: list[Row]) -> str:
+def sweep_table(rows: list[Row], limit_gib: float = GPU_VRAM_GIB) -> str:
     head = (
         "| GPU layers | VRAM (MiB) | TTFT long p50 (ms) | Decode (tok/s) | Status |\n"
         "|--:|--:|--:|--:|---|\n"
     )
     lines = [
-        f"| {r.ngl} | {_n(r.vram_model_mib)} | {_n(r.ttft_long_ms_p50)} "
+        f"| {r.ngl} | {_vram(r, limit_gib)} | {_n(r.ttft_long_ms_p50)} "
         f"| {_n(r.decode_p50, 1)} | {'ok' if not r.error else r.error} |"
         for r in rows
     ]
@@ -298,7 +332,8 @@ def build_report(
             "",
             "## Comparison",
             "",
-            comparison_table(comparison),
+            comparison_table(comparison, vram_limit),
+            *(["", SATURATION_NOTE] if any(r.saturated(vram_limit) for r in comparison) else []),
             "",
             "![Decode speed](figures/decode_speed.png)",
             "",
@@ -310,7 +345,8 @@ def build_report(
             "",
             f"## GPU offload sweep — {sweep[0].model}",
             "",
-            sweep_table(sweep),
+            sweep_table(sweep, vram_limit),
+            *(["", SATURATION_NOTE] if any(r.saturated(vram_limit) for r in sweep) else []),
             "",
             "![Offload sweep](figures/offload_sweep.png)",
         ]
