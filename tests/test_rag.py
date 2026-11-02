@@ -61,7 +61,7 @@ def rag_cfg(tmp_path: Path, url: str = "http://x", **kw: object) -> RagConfig:
 
 def test_repository_rag_yaml_is_valid() -> None:
     cfg = load_rag_config()
-    assert {d.doc_id for d in cfg.corpus} >= {"totalenergies_fy2025", "orange_fy2025"}
+    assert {d.doc_id for d in cfg.corpus} >= {"airbus_fy2025", "schneider_fy2025", "orange_fy2025"}
     assert "{context}" in cfg.prompt_template
 
 

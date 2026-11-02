@@ -61,7 +61,7 @@ same context.
 ```bash
 make rag-up                     # Qdrant + embedding server (Docker)
 make ingest                     # PDFs -> chunks -> embeddings -> Qdrant -> results/rag/ingest.json
-make ask Q="What was TotalEnergies' adjusted net income in 2025?"
+make ask Q="How many commercial aircraft did Airbus deliver in 2025?"
 make ask Q="Quel est le chiffre d'affaires 2025 d'Orange ?" MODEL=llama3.2-3b
 uv run python -m llmbench.rag.ask "..." --retrieval-only   # inspect retrieved chunks only
 ```

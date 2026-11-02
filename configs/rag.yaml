@@ -8,12 +8,12 @@ chunks_file: data/processed/chunks.jsonl
 
 # Corpus: FY2025 results press releases. Download each `url` into raw_dir/`file`.
 corpus:
-  - doc_id: totalenergies_fy2025
-    file: totalenergies_fy2025_en.pdf
-    company: TotalEnergies
-    title: Fourth quarter and full year 2025 results
+  - doc_id: airbus_fy2025
+    file: airbus_fy2025_en.pdf
+    company: Airbus
+    title: Airbus reports Full-Year (FY) 2025 results
     lang: en
-    url: https://totalenergies.com/system/files/documents/totalenergies_pr-results-q4-2025_2026_en.pdf
+    url: https://airbus.com/en/newsroom/press-releases/2026-02-airbus-reports-full-year-fy-2025-results
   - doc_id: schneider_fy2025
     file: schneider_fy2025_en.pdf
     company: Schneider Electric

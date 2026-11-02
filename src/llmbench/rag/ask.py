@@ -2,7 +2,7 @@
 
 CLI::
 
-    python -m llmbench.rag.ask "What was TotalEnergies' 2025 net income?" --retrieval-only
+    python -m llmbench.rag.ask "How many aircraft did Airbus deliver in 2025?" --retrieval-only
     python -m llmbench.rag.ask "Quel est le chiffre d'affaires 2025 d'Orange ?" \
         --model qwen2.5-1.5b --quant gguf_q4_k_m
 """
