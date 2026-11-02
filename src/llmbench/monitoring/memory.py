@@ -36,6 +36,7 @@ class PeakSampler:
         self.peak: float = float("nan")
         self.samples = 0
         self.errors = 0
+        self._stopped = False
 
     def _sample_once(self) -> None:
         try:
@@ -58,6 +59,10 @@ class PeakSampler:
         self._thread.start()
 
     def stop(self) -> float:
+        """Stop sampling and return the peak. Idempotent: later calls return the same peak."""
+        if self._stopped:
+            return self.peak
+        self._stopped = True
         self._stop.set()
         if self._thread is not None:
             self._thread.join()

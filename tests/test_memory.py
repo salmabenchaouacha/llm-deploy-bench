@@ -49,3 +49,10 @@ def test_parse_docker_mem(raw: str, mib: float) -> None:
 def test_parse_docker_mem_rejects_garbage() -> None:
     with pytest.raises(ValueError):
         parse_docker_mem("--")
+
+
+def test_sampler_stop_is_idempotent() -> None:
+    values = iter([10.0, 99.0])
+    sampler = PeakSampler(lambda: next(values), interval_s=10)
+    assert sampler.stop() == 10.0
+    assert sampler.stop() == 10.0  # second stop must not read again (container is gone)

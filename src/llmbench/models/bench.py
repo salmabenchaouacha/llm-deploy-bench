@@ -184,6 +184,14 @@ def append_results(
             fh.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
     csv_path = results_dir / "summary.csv"
     new_file = not csv_path.exists()
+    if not new_file:
+        with csv_path.open(encoding="utf-8") as fh:
+            header = next(csv.reader(fh), [])
+        if header != SUMMARY_FIELDS:  # appending would silently misalign columns
+            raise RuntimeError(
+                f"{csv_path} has different columns than this version writes; "
+                "move it aside (e.g. summary_v1.csv) and rerun"
+            )
     with csv_path.open("a", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=SUMMARY_FIELDS)
         if new_file:
@@ -325,6 +333,8 @@ def run_target(
                 ram.start()
             summary["load_time_s"] = server.load_time_s
             records = list(_measure(target, cfg, server.base_url, session["session_id"]))
+            if ram:  # read while the container still exists: docker stats fails after
+                ram.stop()
     except ServerStartError as exc:
         oom = "out of memory" in str(exc).lower()
         summary["error"] = "cuda_oom" if oom else "server_start_failed"
