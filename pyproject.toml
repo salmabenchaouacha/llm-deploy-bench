@@ -12,13 +12,14 @@ dependencies = [
     "nvidia-ml-py>=12.0",      # VRAM readings (NVML); harmless without a GPU
     "matplotlib>=3.8",         # report figures
     "pypdf>=5.0",              # RAG: PDF text extraction (pure Python, layout mode)
+    "fastapi>=0.115",          # serving: OpenAI-compatible API in front of llama-server
+    "uvicorn>=0.30",
+    "httpx>=0.27",             # async streaming proxy to llama-server
 ]
 
 # GGUF inference runs in the official llama.cpp server image (Docker, CUDA): no Python
-# binding to compile. Heavy, hardware-dependent extras are added phase by phase:
+# binding to compile. Heavy, hardware-dependent extras (V2):
 #   gpu      -> torch + transformers + bitsandbytes (V2, NVIDIA only)
-#   eval     -> ragas, lm-eval, plotting (Phase 3)
-#   serving  -> fastapi, locust, prometheus-client (Phases 4 & 6)
 #   finetune -> peft, trl, datasets, wandb (Phase 5, Colab/Kaggle)
 [project.optional-dependencies]
 
@@ -30,6 +31,9 @@ dev = [
     "pytest-cov>=5.0",
     "pre-commit>=3.8",
     "types-PyYAML>=6.0",
+]
+load = [
+    "locust>=2.31",            # load testing of the API (make load); not in the API image
 ]
 
 [build-system]

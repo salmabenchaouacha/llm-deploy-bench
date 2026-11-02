@@ -1,8 +1,12 @@
-# Long-running services of the platform. The LLM itself (llama-server) is started by the
-# Python code per model/quantization; it joins this file as the `llm` service in Phase 4.
+# Services of the platform.
 #
-#   make rag-up     # start qdrant + embedder
-#   make rag-down   # stop them (data kept in named volumes)
+#   make rag-up       # qdrant + embedder only (ingestion, evaluation)
+#   make serve-up     # + llm (llama-server, GPU) + api (FastAPI)  -> http://localhost:8000/docs
+#   make serve-down / make rag-down
+#
+# The benchmark and the evaluation start their own llama-server per model (Python code);
+# the `serving` profile runs ONE model permanently, chosen with LLM_GGUF / LLM_ALIAS.
+# Do not run `make bench` / `make eval` while it is up: they would share the 4 GB GPU.
 
 services:
   qdrant:
@@ -23,6 +27,61 @@ services:
       - tei_cache:/data            # model weights downloaded on first start (~2.3 GB)
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+
+  llm:
+    # Default model = best quality/speed trade-off of results/eval (Llama 3.2 3B Q4_K_M).
+    # GGUF files come from `make download` (~/.cache/llmbench/models, read-only mount).
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    profiles: ["serving"]
+    command:
+      - --model
+      - /models/${LLM_GGUF:-bartowski__Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf}
+      - --alias
+      - ${LLM_ALIAS:-llama3.2-3b-q4_k_m}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --n-gpu-layers
+      - "99"
+      # Continuous batching: up to LLM_PARALLEL requests decoded together; the context is
+      # split between them (12288 / 4 = 3072 tokens per request, enough for a RAG prompt).
+      - --parallel
+      - ${LLM_PARALLEL:-4}
+      - --ctx-size
+      - ${LLM_CTX:-12288}
+      - --metrics
+    ports:
+      - "127.0.0.1:8092:8080"     # direct access, for debugging and /props
+    volumes:
+      - ${HOME}/.cache/llmbench/models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: llmbench-api:local
+    profiles: ["serving"]
+    environment:
+      - LLM_URL=http://llm:8080
+      - LLM_MODEL=${LLM_ALIAS:-llama3.2-3b-q4_k_m}
+      - EMBEDDER_URL=http://embedder:80
+      - QDRANT_URL=http://qdrant:6333
+    ports:
+      - "127.0.0.1:8000:8000"     # OpenAPI docs: http://localhost:8000/docs
+    depends_on:                   # /health reports 503 until the model is loaded
+      - llm
+      - embedder
+      - qdrant
     restart: unless-stopped
 
 volumes:

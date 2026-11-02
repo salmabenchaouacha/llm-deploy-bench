@@ -3,7 +3,8 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-check eval-validate eval-smoke eval eval-rescore eval-report clean
+        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-check eval-validate eval-smoke eval eval-rescore eval-report \
+        serve-up serve-down serve-logs load load-rag load-report clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -93,6 +94,26 @@ eval-rescore: ## Re-score saved answers with the current metrics/dataset (no mod
 
 eval-report: ## Quality table + quality-vs-speed figure -> results/eval/report.md
 	uv run python -m llmbench.eval.report
+
+serve-up: ## Start API + llama-server (Llama 3.2 3B Q4) + RAG services -> http://localhost:8000/docs
+	uv lock
+	docker compose --profile serving build --build-arg UV_VERSION=$$(uv --version | cut -d' ' -f2) api
+	docker compose --profile serving up -d
+
+serve-down: ## Stop the API and llama-server (RAG services keep running)
+	docker compose --profile serving stop api llm
+
+serve-logs: ## Follow the API and llama-server logs
+	docker compose --profile serving logs -f api llm
+
+load: ## Load test the chat endpoint at 1, 5, 10 concurrent users -> results/load/
+	uv run --group load python -m llmbench.load.run --scenario chat --users 1 5 10
+
+load-rag: ## Load test the RAG endpoint at 1, 5, 10 concurrent users -> results/load/
+	uv run --group load python -m llmbench.load.run --scenario rag --users 1 5 10
+
+load-report: ## Table + figure from results/load/summary.csv -> results/load/report.md
+	uv run python -m llmbench.load.report
 
 clean: ## Remove caches (keeps .venv, data and results)
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

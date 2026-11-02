@@ -89,11 +89,40 @@ make eval            # every variant of configs/eval.yaml -> results/eval/summar
 make eval-report     # results/eval/report.md: accuracy table + quality-vs-speed figure
 ```
 
+### Serving API and load test (Phase 4)
+
+One model served permanently (default: Llama 3.2 3B Q4_K_M, the best quality/speed
+trade-off of Phase 3) by llama-server with continuous batching (4 parallel slots), behind a
+FastAPI gateway that speaks the OpenAI API:
+
+| Endpoint | |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI-compatible, `stream: true` relays Server-Sent Events token by token |
+| `GET /v1/models` | served model |
+| `POST /rag/query` | `{"question": "..."}` -> answer + sources (doc, page, score) + timings |
+| `GET /health` | 200 only when llm, embedder and qdrant all answer |
+| `GET /docs` | interactive OpenAPI documentation |
+
+```bash
+make serve-up        # builds the API image, starts llm + api + qdrant + embedder
+curl -s localhost:8000/health
+curl -s localhost:8000/rag/query -H 'Content-Type: application/json' \
+     -d '{"question": "How many commercial aircraft did Airbus deliver in 2025?"}'
+make load            # Locust, chat endpoint, 1 / 5 / 10 concurrent users -> results/load/
+make load-rag        # same on the full RAG pipeline
+make load-report     # results/load/report.md: throughput and latency vs users
+make serve-down
+```
+
+Any OpenAI client works: `OpenAI(base_url="http://localhost:8000/v1", api_key="unused")`.
+
 ## Project layout
 
 | Path | Content |
 |---|---|
-| `src/llmbench/` | Installable package: `models`, `rag`, `eval`, `serving`, `finetune`, `monitoring` |
+| `src/llmbench/` | Installable package: `models`, `rag`, `eval`, `serving`, `api`, `load`, `monitoring` |
+| `load/` | Locust scenarios (`locustfile.py`) |
+| `docker/` | API image (`api.Dockerfile`) |
 | `configs/` | YAML configuration, validated by Pydantic (`src/llmbench/config.py`) |
 | `data/` | Raw / processed corpus (git-ignored) and the hand-validated eval set (`data/eval/`) |
 | `results/` | Raw measurements (CSV/JSON), versioned |

@@ -1,0 +1,176 @@
+"""Load-test report: throughput and latency versus concurrent users.
+
+Reads ``results/load/summary.csv`` (latest row per scenario and number of users) and writes
+``results/load/report.md`` and ``results/load/figures/load.png``.
+
+CLI::  python -m llmbench.load.report
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import math
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")  # headless: CI, WSL, no display needed
+
+import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+
+from llmbench.load.run import LOAD_DIR
+from llmbench.models.report import INK, INK_2, SERIES, SURFACE, _new
+
+SCENARIO_LABEL = {
+    "chat": "Chat (LLM only, 128 tokens/answer)",
+    "rag": "RAG (embed + search + answer)",
+}
+
+
+def _f(v: str | None) -> float:
+    try:
+        return float(v) if v not in (None, "") else math.nan
+    except ValueError:
+        return math.nan
+
+
+@dataclass(frozen=True)
+class LoadRow:
+    scenario: str
+    users: int
+    requests: int
+    failures: int
+    requests_per_s: float
+    throughput_tok_s: float
+    latency_p50_ms: float
+    latency_p95_ms: float
+    ttft_p50_ms: float
+    ttft_p95_ms: float
+    decode_per_request: float
+    vram_peak_mib: float
+    model: str
+    llm_slots: str
+    duration_s: str
+    gpu_name: str
+
+
+def load_rows(csv_path: Path) -> list[LoadRow]:
+    with csv_path.open(encoding="utf-8") as fh:
+        raw = list(csv.DictReader(fh))
+    latest: dict[tuple[str, int], dict[str, str]] = {}
+    for r in sorted(raw, key=lambda r: r["timestamp"]):
+        latest[(r["scenario"], int(r["users"]))] = r
+    rows = [
+        LoadRow(
+            scenario=r["scenario"],
+            users=int(r["users"]),
+            requests=int(r["requests"] or 0),
+            failures=int(r["failures"] or 0),
+            requests_per_s=_f(r["requests_per_s"]),
+            throughput_tok_s=_f(r["throughput_tok_s"]),
+            latency_p50_ms=_f(r["latency_ms_p50"]),
+            latency_p95_ms=_f(r["latency_ms_p95"]),
+            ttft_p50_ms=_f(r["ttft_ms_p50"]),
+            ttft_p95_ms=_f(r["ttft_ms_p95"]),
+            decode_per_request=_f(r["decode_tok_s_per_request_p50"]),
+            vram_peak_mib=_f(r["vram_peak_mib"]),
+            model=r["model"],
+            llm_slots=r["llm_slots"],
+            duration_s=r["duration_s"],
+            gpu_name=r["gpu_name"],
+        )
+        for r in latest.values()
+    ]
+    return sorted(rows, key=lambda r: (r.scenario, r.users))
+
+
+def _n(v: float, digits: int = 0) -> str:
+    return "—" if math.isnan(v) else f"{v:,.{digits}f}"
+
+
+def table(rows: list[LoadRow]) -> str:
+    lines = [
+        "| Scenario | Users | Requests ok / failed | Req/s | Throughput (tok/s) | "
+        "Latency p50 / p95 (s) | TTFT p50 / p95 (ms) | Decode per request (tok/s) | "
+        "VRAM peak (MiB) |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r.scenario} | {r.users} | {r.requests} / {r.failures} | "
+            f"{_n(r.requests_per_s, 2)} | **{_n(r.throughput_tok_s, 1)}** | "
+            f"{_n(r.latency_p50_ms / 1000, 1)} / {_n(r.latency_p95_ms / 1000, 1)} | "
+            f"{_n(r.ttft_p50_ms)} / {_n(r.ttft_p95_ms)} | {_n(r.decode_per_request, 1)} | "
+            f"{_n(r.vram_peak_mib)} |"
+        )
+    return "\n".join(lines)
+
+
+def plot(rows: list[LoadRow], out: Path) -> None:
+    """Small multiples (no dual axis): throughput and p95 latency versus users."""
+    scenarios = sorted({r.scenario for r in rows})
+    fig, axes = _new(10, 4, ncols=2)
+    panels: list[tuple[Axes, str, Callable[[LoadRow], float]]] = [
+        (axes[0], "Total throughput (tokens/s, higher is better)",
+         lambda r: r.throughput_tok_s),
+        (axes[1], "Latency p95 (s, lower is better)", lambda r: r.latency_p95_ms / 1000),
+    ]  # fmt: skip
+    for ax, title, value in panels:
+        for i, sc in enumerate(scenarios):
+            pts = [r for r in rows if r.scenario == sc]
+            ax.plot([r.users for r in pts], [value(r) for r in pts], marker="o",
+                    color=SERIES[i % len(SERIES)], linewidth=2,
+                    label=SCENARIO_LABEL.get(sc, sc))  # fmt: skip
+        ax.set_xlabel("Concurrent users", color=INK_2)
+        ax.set_xticks(sorted({r.users for r in rows}))
+        ax.set_ylim(bottom=0)
+        ax.set_title(title, loc="left", color=INK, fontsize=10)
+    axes[0].legend(frameon=False, fontsize=8, labelcolor=INK)
+    fig.tight_layout()
+    fig.savefig(out, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def build_report(csv_path: Path, out_dir: Path) -> Path:
+    rows = load_rows(csv_path)
+    if not rows:
+        raise SystemExit(f"no rows in {csv_path}: run `make load` first")
+    figures = out_dir / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    plot(rows, figures / "load.png")
+    first = rows[0]
+    text = f"""# Load test — results
+
+_Generated by `python -m llmbench.load.report` from [`summary.csv`](summary.csv); \
+per-request records in [`raw/`](raw/)._
+
+Setup: model **{first.model}** served by llama-server with **{first.llm_slots or "?"} \
+parallel slots**, behind the FastAPI gateway; GPU {first.gpu_name or "unknown"}. \
+Locust, closed loop (each user sends its next request as soon as the previous one ends), \
+{first.duration_s} s per level. Throughput = generated tokens of successful requests / \
+wall-clock time. VRAM = whole device (includes the desktop).
+
+{table(rows)}
+
+![Load test](figures/load.png)
+"""
+    report = out_dir / "report.md"
+    report.write_text(text, encoding="utf-8")
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build the load-test report.")
+    parser.add_argument("--csv", type=Path, default=LOAD_DIR / "summary.csv")
+    parser.add_argument("--out-dir", type=Path, default=LOAD_DIR)
+    args = parser.parse_args(argv)
+    print(f"Report written to {build_report(args.csv, args.out_dir)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

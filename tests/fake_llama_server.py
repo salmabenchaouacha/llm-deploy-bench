@@ -1,8 +1,8 @@
 """A tiny HTTP server that mimics llama-server's API, for tests without a GPU.
 
-Implements ``GET /health``, ``POST /tokenize`` (1 token per word) and a streaming
-``POST /v1/chat/completions`` that emits one SSE event per word, then a final event
-with ``timings`` like llama-server does.
+Implements ``GET /health``, ``GET /v1/models``, ``GET /props``, ``POST /tokenize``
+(1 token per word) and ``POST /v1/chat/completions``: JSON, or with ``stream: true`` one
+SSE event per word, then a final event with ``timings`` like llama-server does.
 """
 
 from __future__ import annotations
@@ -41,6 +41,10 @@ def _handler(state: FakeState) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             if self.path == "/health":
                 self._json(200 if state.healthy else 503, {"status": "ok"})
+            elif self.path == "/v1/models":
+                self._json(200, {"object": "list", "data": [{"id": "fake-model"}]})
+            elif self.path == "/props":
+                self._json(200, {"total_slots": 4})
             else:
                 self._json(404, {})
 
@@ -50,7 +54,15 @@ def _handler(state: FakeState) -> type[BaseHTTPRequestHandler]:
                 self._json(200, {"tokens": list(range(len(body["content"].split())))})
                 return
             state.requests.append(body)
-            n = min(body["max_tokens"], len(state.words))
+            n = min(body.get("max_tokens", 16), len(state.words))
+            if not body.get("stream"):
+                self._json(200, {
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "finish_reason": "length", "message": {
+                        "role": "assistant", "content": " ".join(state.words[:n])}}],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": n},
+                })  # fmt: skip
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
