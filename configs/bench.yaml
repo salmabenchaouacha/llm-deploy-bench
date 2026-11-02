@@ -9,7 +9,7 @@ server:
   image: ghcr.io/ggml-org/llama.cpp:server-cuda
   use_gpu: true
   host: 127.0.0.1
-  port: 8080
+  port: 8091
   n_ctx: 4096
   startup_timeout_s: 300
   models_dir: ~/.cache/llmbench/models   # outside the repo: GGUF files are GBs
