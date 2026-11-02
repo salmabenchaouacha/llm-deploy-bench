@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep clean
+        config gpu-check download bench bench-sweep report clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -56,6 +56,9 @@ bench: ## Performance benchmark of every enabled GGUF variant -> results/perf/
 bench-sweep: ## Mistral-7B GPU offload sweep (layers on GPU vs speed) -> results/perf/
 	uv run python -m llmbench.models.bench --model mistral-7b --quant gguf_q4_k_m \
 		--n-gpu-layers 0 8 16 20 24 28 32
+
+report: ## Tables + figures from results/perf/summary.csv -> results/perf/report.md
+	uv run python -m llmbench.models.report
 
 clean: ## Remove caches (keeps .venv, data and results)
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

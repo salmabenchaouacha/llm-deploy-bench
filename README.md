@@ -39,6 +39,7 @@ make gpu-check      # the container must list the GPU
 make download       # ~12 GB of GGUF files
 make bench          # every enabled variant -> results/perf/summary.csv + runs.jsonl
 make bench-sweep    # Mistral-7B: layers offloaded to GPU vs speed / VRAM
+make report         # results/perf/report.md + figures, generated from the CSV
 ```
 
 Protocol (`configs/bench.yaml`): 3 prompts (short, French, long RAG-like context),
