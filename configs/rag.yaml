@@ -1,0 +1,61 @@
+# RAG pipeline configuration. Validated by llmbench.config.RagConfig.
+#
+# The retriever (chunking + embedder + Qdrant + top_k) is fixed: every LLM / quantization
+# receives exactly the same context, so quality differences come from the model only.
+
+raw_dir: data/raw                      # PDFs (git-ignored: documents belong to the companies)
+chunks_file: data/processed/chunks.jsonl
+
+# Corpus: FY2025 results press releases. Download each `url` into raw_dir/`file`.
+corpus:
+  - doc_id: totalenergies_fy2025
+    file: totalenergies_fy2025_en.pdf
+    company: TotalEnergies
+    title: Fourth quarter and full year 2025 results
+    lang: en
+    url: https://totalenergies.com/system/files/documents/totalenergies_pr-results-q4-2025_2026_en.pdf
+  - doc_id: schneider_fy2025
+    file: schneider_fy2025_en.pdf
+    company: Schneider Electric
+    title: Full year 2025 results
+    lang: en
+    url: https://www.se.com/ww/en/about-us/investor-relations/financial-results
+  - doc_id: orange_fy2025
+    file: orange_fy2025_en.pdf
+    company: Orange
+    title: Full year 2025 results
+    lang: en
+    url: https://www.orange.com/en/latest-consolidated-results
+
+chunking:
+  max_chars: 1200       # ~300 tokens: small enough to be precise, large enough for a table row + header
+  overlap_chars: 150    # a sentence cut at a boundary still appears whole in one chunk
+
+embedder:
+  image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+  model_id: BAAI/bge-m3  # multilingual (FR questions on EN documents), 1024-dim
+  url: http://127.0.0.1:8093
+  dim: 1024
+  batch_size: 16
+
+qdrant:
+  image: qdrant/qdrant:v1.17.1
+  url: http://127.0.0.1:6333
+  collection: financial_reports
+
+top_k: 5                # 5 x ~300 tokens of context: fits the 4096-token window with room to answer
+max_new_tokens: 256
+
+# Single user turn (no system role): some chat templates (e.g. Mistral v0.3) reject it.
+prompt_template: |
+  You are a financial analyst assistant. Answer the question using ONLY the context below,
+  extracted from company results reports. Quote figures exactly as written, with their unit
+  and period. If the context does not contain the answer, reply exactly:
+  "The provided documents do not contain this information."
+  Answer in the language of the question, in at most 4 sentences, and cite the sources
+  you used as [doc_id p.page].
+
+  Context:
+  {context}
+
+  Question: {question}

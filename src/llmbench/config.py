@@ -24,6 +24,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 RESULTS_DIR = PROJECT_ROOT / "results"
 DEFAULT_MODELS_CONFIG = CONFIG_DIR / "models.yaml"
 DEFAULT_BENCH_CONFIG = CONFIG_DIR / "bench.yaml"
+DEFAULT_RAG_CONFIG = CONFIG_DIR / "rag.yaml"
 
 
 class ConfigError(Exception):
@@ -210,6 +211,82 @@ class BenchConfig(StrictModel):
     prompts: list[str] = Field(..., min_length=1)
 
 
+class CorpusDoc(StrictModel):
+    """One source document of the RAG corpus (the PDF itself is not versioned)."""
+
+    doc_id: str = Field(..., pattern=r"^[a-z0-9_]+$")
+    file: str = Field(..., pattern=r"\.pdf$")
+    company: str
+    title: str
+    lang: str = Field(..., pattern=r"^[a-z]{2}$")
+    url: str = Field(..., pattern=r"^https://")
+
+
+class ChunkingConfig(StrictModel):
+    """Chunks never cross a page boundary, so every chunk cites one exact page."""
+
+    max_chars: int = Field(1200, ge=200, description="~300 tokens for English text")
+    overlap_chars: int = Field(150, ge=0)
+
+    @model_validator(mode="after")
+    def _overlap_smaller(self) -> Self:
+        if self.overlap_chars >= self.max_chars:
+            raise ValueError("overlap_chars must be smaller than max_chars")
+        return self
+
+
+class EmbedderConfig(StrictModel):
+    """Text Embeddings Inference (TEI) server, CPU image: keeps the 4 GB of VRAM for the LLM."""
+
+    image: str = "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9"
+    model_id: str = "BAAI/bge-m3"
+    url: str = "http://127.0.0.1:8093"
+    dim: int = Field(1024, gt=0)
+    batch_size: int = Field(16, gt=0)
+    query_prefix: str = ""  # e5-style models need "query: "
+    passage_prefix: str = ""  # ... and "passage: "
+
+
+class QdrantConfig(StrictModel):
+    image: str = "qdrant/qdrant:v1.17.1"
+    url: str = "http://127.0.0.1:6333"
+    collection: str = "financial_reports"
+
+
+class RagConfig(StrictModel):
+    """Root of ``configs/rag.yaml``."""
+
+    raw_dir: Path = Path("data/raw")
+    chunks_file: Path = Path("data/processed/chunks.jsonl")
+    corpus: list[CorpusDoc] = Field(..., min_length=1)
+    chunking: ChunkingConfig = ChunkingConfig()
+    embedder: EmbedderConfig = EmbedderConfig()
+    qdrant: QdrantConfig = QdrantConfig()
+    top_k: int = Field(5, ge=1, le=20)
+    max_new_tokens: int = Field(256, gt=0)
+    prompt_template: str = Field(..., min_length=20)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        ids = [d.doc_id for d in self.corpus]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate doc_id in corpus")
+        for field in ("{context}", "{question}"):
+            if field not in self.prompt_template:
+                raise ValueError(f"prompt_template must contain {field}")
+        return self
+
+    def resolve(self, path: Path) -> Path:
+        """Relative paths in the config are relative to the project root."""
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+    def doc(self, doc_id: str) -> CorpusDoc:
+        for d in self.corpus:
+            if d.doc_id == doc_id:
+                return d
+        raise KeyError(f"unknown doc_id '{doc_id}'")
+
+
 def _read_yaml(path: Path) -> Any:
     if not path.is_file():
         raise ConfigError(f"config file not found: {path}")
@@ -234,6 +311,15 @@ def load_bench_config(path: Path | str = DEFAULT_BENCH_CONFIG) -> BenchConfig:
     path = Path(path)
     try:
         return BenchConfig.model_validate(_read_yaml(path))
+    except ValidationError as exc:
+        raise ConfigError(f"invalid config {path}:\n{exc}") from exc
+
+
+def load_rag_config(path: Path | str = DEFAULT_RAG_CONFIG) -> RagConfig:
+    """Load and validate ``rag.yaml``. Raises :class:`ConfigError` on any problem."""
+    path = Path(path)
+    try:
+        return RagConfig.model_validate(_read_yaml(path))
     except ValidationError as exc:
         raise ConfigError(f"invalid config {path}:\n{exc}") from exc
 

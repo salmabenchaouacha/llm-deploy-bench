@@ -11,12 +11,12 @@ dependencies = [
     "huggingface-hub>=0.25",   # GGUF downloads
     "nvidia-ml-py>=12.0",      # VRAM readings (NVML); harmless without a GPU
     "matplotlib>=3.8",         # report figures
+    "pypdf>=5.0",              # RAG: PDF text extraction (pure Python, layout mode)
 ]
 
 # GGUF inference runs in the official llama.cpp server image (Docker, CUDA): no Python
 # binding to compile. Heavy, hardware-dependent extras are added phase by phase:
 #   gpu      -> torch + transformers + bitsandbytes (V2, NVIDIA only)
-#   rag      -> qdrant-client, embeddings, PDF parsing (Phase 2)
 #   eval     -> ragas, lm-eval, plotting (Phase 3)
 #   serving  -> fastapi, locust, prometheus-client (Phases 4 & 6)
 #   finetune -> peft, trl, datasets, wandb (Phase 5, Colab/Kaggle)
