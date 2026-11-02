@@ -28,6 +28,8 @@ import matplotlib
 matplotlib.use("Agg")  # headless: CI, WSL, no display needed
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 from llmbench.config import DEFAULT_MODELS_CONFIG, RESULTS_DIR, load_models_config
 
@@ -82,6 +84,13 @@ class Row:
     @property
     def ngl_int(self) -> int | None:
         return int(self.ngl) if self.ngl.isdigit() else None
+
+    @property
+    def gpu_layers(self) -> int:
+        """Layer count of a sweep row (always numeric there)."""
+        if self.ngl_int is None:
+            raise ValueError(f"{self.label}: not a partial-offload measurement")
+        return self.ngl_int
 
 
 def _f(value: str | None) -> float:
@@ -145,7 +154,7 @@ def split_rows(rows: list[Row], default_ngl: dict[str, int | None]) -> tuple[lis
 # ---------------------------------------------------------------- figures
 
 
-def _style(ax: plt.Axes) -> None:
+def _style(ax: Axes) -> None:
     ax.set_facecolor(SURFACE)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -156,7 +165,7 @@ def _style(ax: plt.Axes) -> None:
     ax.set_axisbelow(True)
 
 
-def _new(width: float, height: float, ncols: int = 1) -> tuple[plt.Figure, list[plt.Axes]]:
+def _new(width: float, height: float, ncols: int = 1) -> tuple[Figure, list[Axes]]:
     fig, axes = plt.subplots(1, ncols, figsize=(width, height), dpi=150)
     fig.patch.set_facecolor(SURFACE)
     axes_list = list(axes) if ncols > 1 else [axes]
@@ -214,7 +223,7 @@ def plot_sweep(rows: list[Row], out: Path, vram_limit_gib: float) -> None:
     ok = [r for r in rows if not r.error]
     failed = [r for r in rows if r.error]
     fig, (ax_speed, ax_vram) = _new(10, 4, ncols=2)
-    x = [r.ngl_int for r in ok]
+    x = [r.gpu_layers for r in ok]
     ax_speed.plot(x, [r.decode_p50 for r in ok], color=SERIES[0], linewidth=2, marker="o",
                   markersize=6, markeredgecolor=SURFACE)  # fmt: skip
     ax_vram.plot(x, [r.vram_model_mib / 1024 for r in ok], color=SERIES[0], linewidth=2,
@@ -225,7 +234,7 @@ def plot_sweep(rows: list[Row], out: Path, vram_limit_gib: float) -> None:
     saturated = [r for r in ok if r.saturated(vram_limit_gib)]
     if saturated:  # hollow markers: measured value is only a lower bound
         ax_vram.scatter(
-            [r.ngl_int for r in saturated],
+            [r.gpu_layers for r in saturated],
             [r.vram_model_mib / 1024 for r in saturated],
             s=60,
             facecolor=SURFACE,
@@ -235,18 +244,18 @@ def plot_sweep(rows: list[Row], out: Path, vram_limit_gib: float) -> None:
         )
         first = saturated[0]
         ax_vram.annotate("card full: real use is higher\n(spill to shared memory)",
-                         (first.ngl_int, first.vram_model_mib / 1024),
+                         (first.gpu_layers, first.vram_model_mib / 1024),
                          textcoords="axes fraction", xytext=(0.55, 0.3), fontsize=8,
                          color=INK_2, arrowprops={"arrowstyle": "-", "color": INK_2,
                                                   "linewidth": 0.8})  # fmt: skip
     for r in ok:
-        ax_speed.annotate(f"{r.decode_p50:.1f}", (r.ngl_int, r.decode_p50),
+        ax_speed.annotate(f"{r.decode_p50:.1f}", (r.gpu_layers, r.decode_p50),
                           textcoords="offset points", xytext=(0, 8), ha="center",
                           fontsize=8, color=INK)  # fmt: skip
     for ax in (ax_speed, ax_vram):
         for r in failed:
-            ax.axvline(r.ngl_int, color=OOM_COLOR, linewidth=1, linestyle=":")
-            ax.text(r.ngl_int, 0.02, " OOM" if r.error == "cuda_oom" else " failed",
+            ax.axvline(r.gpu_layers, color=OOM_COLOR, linewidth=1, linestyle=":")
+            ax.text(r.gpu_layers, 0.02, " OOM" if r.error == "cuda_oom" else " failed",
                     transform=ax.get_xaxis_transform(), color=INK_2, fontsize=8,
                     rotation=90, va="bottom")  # fmt: skip
         ax.set_xlabel("Layers offloaded to the GPU", color=INK_2)
