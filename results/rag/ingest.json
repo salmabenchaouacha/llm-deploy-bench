@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-11-02T18:32:44+00:00",
-  "git_commit": "c376e1d",
+  "timestamp": "2026-11-02T19:15:14+00:00",
+  "git_commit": "af0ce00",
   "embedder": {
     "model_id": "BAAI/bge-m3",
     "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9",
@@ -14,6 +14,7 @@
     "max_chars": 1200,
     "overlap_chars": 150
   },
+  "chunk_header": "{company} — {title}",
   "documents": [
     {
       "doc_id": "airbus_fy2025",
@@ -24,24 +25,24 @@
       "chars": 20972
     },
     {
-      "doc_id": "schneider_fy2025",
-      "file": "schneider_fy2025_en.pdf",
-      "sha256": "ce00d5273a7ef84cb57e483e42350a62bc3088884409a2e8bc80e10f20937702",
-      "pages_with_text": 12,
-      "chunks": 31,
-      "chars": 29471
-    },
-    {
-      "doc_id": "orange_fy2025",
-      "file": "orange_fy2025_en.pdf",
+      "doc_id": "totalenergies_fy2025",
+      "file": "totalenergies_fy2025_en.pdf",
       "sha256": "e339b5d433a3a525de66b7465354a918f914bbd254fcbb0e0450937fc88473a7",
       "pages_with_text": 49,
       "chunks": 138,
       "chars": 125934
+    },
+    {
+      "doc_id": "schneider_q1_2025",
+      "file": "schneider_q1_2025_en.pdf",
+      "sha256": "ce00d5273a7ef84cb57e483e42350a62bc3088884409a2e8bc80e10f20937702",
+      "pages_with_text": 12,
+      "chunks": 31,
+      "chars": 29471
     }
   ],
   "total_chunks": 193,
-  "chunk_chars_median": 1124,
-  "embed_seconds": 218.05,
-  "embed_chunks_per_s": 0.89
+  "chunk_chars_median": 1178,
+  "embed_seconds": 226.26,
+  "embed_chunks_per_s": 0.85
 }
