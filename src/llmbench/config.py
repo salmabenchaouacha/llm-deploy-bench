@@ -25,6 +25,7 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 DEFAULT_MODELS_CONFIG = CONFIG_DIR / "models.yaml"
 DEFAULT_BENCH_CONFIG = CONFIG_DIR / "bench.yaml"
 DEFAULT_RAG_CONFIG = CONFIG_DIR / "rag.yaml"
+DEFAULT_EVAL_CONFIG = CONFIG_DIR / "eval.yaml"
 
 
 class ConfigError(Exception):
@@ -295,6 +296,19 @@ class RagConfig(StrictModel):
         raise KeyError(f"unknown doc_id '{doc_id}'")
 
 
+class EvalConfig(StrictModel):
+    """Root of ``configs/eval.yaml``."""
+
+    dataset: Path = Path("data/eval/questions.jsonl")
+    chunks_file: Path = Path("data/processed/chunks.jsonl")
+    only_validated: bool = True
+    variants: list[tuple[str, Quant]] = Field(..., min_length=1)
+    refusal_markers: list[str] = Field(..., min_length=1)
+
+    def resolve(self, path: Path) -> Path:
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+
 def _read_yaml(path: Path) -> Any:
     if not path.is_file():
         raise ConfigError(f"config file not found: {path}")
@@ -328,6 +342,15 @@ def load_rag_config(path: Path | str = DEFAULT_RAG_CONFIG) -> RagConfig:
     path = Path(path)
     try:
         return RagConfig.model_validate(_read_yaml(path))
+    except ValidationError as exc:
+        raise ConfigError(f"invalid config {path}:\n{exc}") from exc
+
+
+def load_eval_config(path: Path | str = DEFAULT_EVAL_CONFIG) -> EvalConfig:
+    """Load and validate ``eval.yaml``. Raises :class:`ConfigError` on any problem."""
+    path = Path(path)
+    try:
+        return EvalConfig.model_validate(_read_yaml(path))
     except ValidationError as exc:
         raise ConfigError(f"invalid config {path}:\n{exc}") from exc
 

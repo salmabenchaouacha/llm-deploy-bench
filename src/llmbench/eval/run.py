@@ -1,0 +1,282 @@
+"""Run the RAG quality evaluation for one or several model/quant variants.
+
+For each variant: start llama-server, answer every evaluation question through the shared
+RAG pipeline, score answers with deterministic metrics, then write
+
+* ``results/eval/answers/<model>__<quant>.jsonl`` - every question, answer, chunks, scores
+* ``results/eval/summary.csv``                    - one row per variant and run
+
+CLI::
+
+    python -m llmbench.eval.run --model qwen2.5-1.5b --quant gguf_q4_k_m
+    python -m llmbench.eval.run --all            # every variant listed in configs/eval.yaml
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import statistics
+import uuid
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from llmbench.config import (
+    DEFAULT_BENCH_CONFIG,
+    DEFAULT_EVAL_CONFIG,
+    DEFAULT_MODELS_CONFIG,
+    DEFAULT_RAG_CONFIG,
+    RESULTS_DIR,
+    ConfigError,
+    load_bench_config,
+    load_eval_config,
+    load_models_config,
+    load_rag_config,
+)
+from llmbench.eval.dataset import EvalItem, Status, dataset_hash, load_items
+from llmbench.eval.metrics import ItemScore, score_item
+from llmbench.log import get_logger
+from llmbench.models.bench import git_commit, percentile
+from llmbench.models.hub import ensure_gguf, gguf_relpath
+from llmbench.rag.embed import TEIEmbedder
+from llmbench.rag.pipeline import RagPipeline, Retriever
+from llmbench.rag.services import wait_for_rag_services
+from llmbench.rag.store import QdrantStore
+from llmbench.serving.llama_server import DockerRunError, LlamaServer, ServerStartError
+
+log = get_logger(__name__)
+
+EVAL_DIR = RESULTS_DIR / "eval"
+
+SUMMARY_FIELDS = [
+    "session_id",
+    "timestamp",
+    "git_commit",
+    "dataset_hash",
+    "model",
+    "quant",
+    "n_gpu_layers",
+    "top_k",
+    "n_items",
+    "n_answerable",
+    "n_unanswerable",
+    "retrieval_hit_at_k",
+    "mrr",
+    "fact_recall",
+    "answer_accuracy",
+    "false_refusal_rate",
+    "refusal_accuracy",
+    "hallucination_rate",
+    "ttft_ms_p50",
+    "total_ms_p50",
+    "gen_tokens_mean",
+    "error",
+]
+
+
+@dataclass
+class AnswerRecord:
+    item_id: str
+    category: str
+    answerable: bool
+    question: str
+    answer: str
+    reference_answer: str
+    retrieved: list[str]
+    score: ItemScore
+    ttft_ms: float
+    total_ms: float
+    gen_tokens: int | None
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["score"] = asdict(self.score)
+        return d
+
+
+def evaluate(
+    items: Sequence[EvalItem],
+    pipeline: RagPipeline,
+    llm_base_url: str,
+    refusal_markers: Sequence[str],
+) -> list[AnswerRecord]:
+    records = []
+    for n, item in enumerate(items, 1):
+        ans = pipeline.answer(item.question, llm_base_url)
+        score = score_item(item, ans.answer, ans.hits, refusal_markers)
+        records.append(
+            AnswerRecord(
+                item_id=item.id,
+                category=item.category,
+                answerable=item.answerable,
+                question=item.question,
+                answer=ans.answer,
+                reference_answer=item.reference_answer,
+                retrieved=ans.sources,
+                score=score,
+                ttft_ms=ans.ttft_ms,
+                total_ms=ans.total_ms,
+                gen_tokens=ans.gen_tokens,
+            )
+        )
+        log.info(
+            "answered",
+            extra={
+                "n": f"{n}/{len(items)}",
+                "id": item.id,
+                "correct": score.correct or score.correct_refusal,
+            },
+        )
+    return records
+
+
+def _ratio(num: float, den: float) -> float:
+    return num / den if den else math.nan
+
+
+def aggregate(records: Sequence[AnswerRecord]) -> dict[str, Any]:
+    ans = [r for r in records if r.answerable]
+    una = [r for r in records if not r.answerable]
+    ranks = [r.score.rank for r in ans]
+    gen = [r.gen_tokens for r in records if r.gen_tokens is not None]
+    return {
+        "n_items": len(records),
+        "n_answerable": len(ans),
+        "n_unanswerable": len(una),
+        "retrieval_hit_at_k": _ratio(sum(x is not None for x in ranks), len(ans)),
+        "mrr": _ratio(sum(1 / x for x in ranks if x), len(ans)),
+        "fact_recall": _ratio(
+            sum(r.score.facts_found for r in ans), sum(r.score.facts_total for r in ans)
+        ),
+        "answer_accuracy": _ratio(sum(r.score.correct for r in ans), len(ans)),
+        "false_refusal_rate": _ratio(sum(r.score.refused for r in ans), len(ans)),
+        "refusal_accuracy": _ratio(sum(r.score.correct_refusal for r in una), len(una)),
+        "hallucination_rate": _ratio(sum(r.score.hallucinated for r in una), len(una)),
+        "ttft_ms_p50": percentile([r.ttft_ms for r in records], 50),
+        "total_ms_p50": percentile([r.total_ms for r in records], 50),
+        "gen_tokens_mean": statistics.fmean(gen) if gen else math.nan,
+    }
+
+
+def _fmt(v: Any) -> Any:
+    if isinstance(v, float):
+        return "" if math.isnan(v) else round(v, 4)
+    return "" if v is None else v
+
+
+def write_results(records: Sequence[AnswerRecord], summary: dict[str, Any], out_dir: Path) -> Path:
+    answers_dir = out_dir / "answers"
+    answers_dir.mkdir(parents=True, exist_ok=True)
+    answers = answers_dir / f"{summary['model']}__{summary['quant']}.jsonl"
+    with answers.open("w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r.to_dict(), ensure_ascii=False) + "\n")
+    csv_path = out_dir / "summary.csv"
+    new = not csv_path.exists()
+    if not new:
+        with csv_path.open(encoding="utf-8") as fh:
+            if next(csv.reader(fh), []) != SUMMARY_FIELDS:
+                raise RuntimeError(f"{csv_path} has other columns; move it aside and rerun")
+    with csv_path.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SUMMARY_FIELDS)
+        if new:
+            writer.writeheader()
+        writer.writerow({k: _fmt(summary.get(k)) for k in SUMMARY_FIELDS})
+    return answers
+
+
+def select_items(items: list[EvalItem], only_validated: bool) -> list[EvalItem]:
+    kept = [i for i in items if i.status is not Status.REJECTED]
+    return [i for i in kept if i.status is Status.VALIDATED] if only_validated else kept
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="RAG quality evaluation.")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--all", action="store_true", help="every variant in eval.yaml")
+    group.add_argument("--model")
+    parser.add_argument("--quant", default="gguf_q4_k_m")
+    parser.add_argument(
+        "--include-drafts",
+        action="store_true",
+        help="also use unvalidated items (debug only, not for reporting)",
+    )
+    parser.add_argument("--limit", type=int, help="first N items only (smoke test)")
+    parser.add_argument("--out-dir", type=Path, default=EVAL_DIR)
+    parser.add_argument("--eval-config", default=DEFAULT_EVAL_CONFIG)
+    parser.add_argument("--rag-config", default=DEFAULT_RAG_CONFIG)
+    parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG)
+    parser.add_argument("--bench-config", default=DEFAULT_BENCH_CONFIG)
+    args = parser.parse_args(argv)
+
+    try:
+        ecfg = load_eval_config(args.eval_config)
+        rag = load_rag_config(args.rag_config)
+        models = load_models_config(args.models_config)
+        server_cfg = load_bench_config(args.bench_config).server
+        variants = ecfg.variants if args.all else [(args.model, args.quant)]
+        resolved = [(m, models.get(m).variant(q)) for m, q in variants]
+    except (ConfigError, KeyError) as exc:
+        print(f"ERROR: {exc.args[0] if exc.args else exc}")
+        return 2
+
+    dataset_path = ecfg.resolve(ecfg.dataset)
+    if not dataset_path.is_file():
+        print(f"ERROR: {dataset_path} not found — draft and validate questions first")
+        return 2
+    items = select_items(load_items(dataset_path), ecfg.only_validated and not args.include_drafts)
+    if args.limit:
+        items = items[: args.limit]
+    if not items:
+        print("ERROR: no evaluation items (validate some with `make eval-validate`)")
+        return 2
+    print(f"{len(items)} items ({sum(i.answerable for i in items)} answerable)")
+
+    wait_for_rag_services(rag)
+    retriever = Retriever(TEIEmbedder(rag.embedder), QdrantStore(rag.qdrant), rag.top_k)
+    pipeline = RagPipeline(retriever, rag.prompt_template, rag.max_new_tokens)
+    session = {
+        "session_id": uuid.uuid4().hex[:8],
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        "git_commit": git_commit(),
+        "dataset_hash": dataset_hash(items) + ("-drafts" if args.include_drafts else ""),
+        "top_k": rag.top_k,
+    }
+    for model_id, variant in resolved:
+        summary: dict[str, Any] = {
+            **session,
+            "model": model_id,
+            "quant": variant.quant.value,
+            "n_gpu_layers": variant.n_gpu_layers or "all",
+        }
+        ensure_gguf(variant, server_cfg.models_path)
+        try:
+            with LlamaServer.from_config(
+                server_cfg, gguf_relpath(variant), variant.n_gpu_layers
+            ) as srv:
+                records = evaluate(items, pipeline, srv.base_url, ecfg.refusal_markers)
+        except DockerRunError as exc:
+            print(f"ERROR: {exc}")
+            return 3
+        except ServerStartError as exc:
+            summary["error"] = "server_start_failed"
+            log.error("server failed", extra={"model": model_id, "details": str(exc)[-500:]})
+            records = []
+        summary.update(aggregate(records) if records else {"n_items": 0})
+        path = write_results(records, summary, args.out_dir)
+        print(
+            f"-> {model_id} {variant.quant.value}: "
+            f"accuracy {summary.get('answer_accuracy', math.nan):.0%}, "
+            f"fact recall {summary.get('fact_recall', math.nan):.0%}, "
+            f"hallucination {summary.get('hallucination_rate', math.nan):.0%} -> {path}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

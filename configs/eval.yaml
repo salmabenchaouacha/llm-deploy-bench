@@ -1,0 +1,29 @@
+# Quality evaluation protocol. Validated by llmbench.config.EvalConfig.
+#
+# The retriever (configs/rag.yaml) is shared by every variant: same chunks, same prompt,
+# greedy decoding. Only validated items count in the reported numbers.
+
+dataset: data/eval/questions.jsonl
+chunks_file: data/processed/chunks.jsonl   # shown during manual validation
+only_validated: true
+
+# Variants compared (model id, quant) — the GGUF variants benchmarked in results/perf/.
+variants:
+  - [qwen2.5-0.5b, gguf_q4_k_m]
+  - [qwen2.5-1.5b, gguf_q4_k_m]
+  - [qwen2.5-1.5b, gguf_q8_0]
+  - [llama3.2-3b, gguf_q4_k_m]
+  - [llama3.2-3b, gguf_q8_0]
+  - [mistral-7b, gguf_q4_k_m]
+
+# An answer containing one of these (case-insensitive) counts as "the documents do not say".
+refusal_markers:
+  - do not contain this information
+  - does not contain this information
+  - do not contain information
+  - not contain this information
+  - no information
+  - ne contiennent pas
+  - ne contient pas
+  - pas cette information
+  - aucune information
