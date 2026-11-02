@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-gpu lint format typecheck test test-all check precommit \
-        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-check eval-validate eval-smoke eval eval-report clean
+        config gpu-check download bench bench-sweep report rag-up rag-down ingest ask eval-check eval-validate eval-smoke eval eval-rescore eval-report clean
 
 LLAMA_IMAGE ?= ghcr.io/ggml-org/llama.cpp:server-cuda
 
@@ -87,6 +87,9 @@ eval-smoke: ## Quick end-to-end check: 3 questions, one model, drafts allowed (n
 
 eval: ## RAG quality, every variant of configs/eval.yaml (resumes: skips variants already done)
 	uv run python -m llmbench.eval.run --all --resume
+
+eval-rescore: ## Re-score saved answers with the current metrics/dataset (no model run)
+	uv run python -m llmbench.eval.rescore
 
 eval-report: ## Quality table + quality-vs-speed figure -> results/eval/report.md
 	uv run python -m llmbench.eval.report

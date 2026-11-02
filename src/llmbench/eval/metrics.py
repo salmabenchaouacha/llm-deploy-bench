@@ -9,7 +9,8 @@ Generation
   "15,587" == "15587", French "15,6" == "15.6", "793" is not found inside "1793")
 * ``correct``  - answerable item and all key facts present
 * ``refused``  - the answer says the documents do not contain the information
-* unanswerable items: refusing is correct, answering is a hallucination.
+* unanswerable items: refusing is correct, answering is a hallucination (an empty answer
+  is neither: it asserts nothing).
 """
 
 from __future__ import annotations
@@ -95,7 +96,9 @@ def score_item(
 ) -> ItemScore:
     refused = is_refusal(answer, markers)
     if not item.answerable:
-        return ItemScore(None, 0, 0, False, refused, refused, not refused)
+        # An empty answer (immediate EOS, server crash) asserts nothing: not a hallucination.
+        hallucinated = not refused and bool(answer.strip())
+        return ItemScore(None, 0, 0, False, refused, refused, hallucinated)
     found = sum(any(contains_fact(answer, alt) for alt in group) for group in item.key_facts)
     total = len(item.key_facts)
     return ItemScore(

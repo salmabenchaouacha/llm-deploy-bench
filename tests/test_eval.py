@@ -435,3 +435,52 @@ def test_server_that_stays_down_records_errors_without_aborting() -> None:
     )
     assert [r.answer for r in records] == ["", ""]
     assert all("ConnectionRefusedError" in r.error for r in records)
+
+
+def test_empty_answer_to_unanswerable_is_not_a_hallucination() -> None:
+    it = item(id="u", answerable=False, doc_id=None, source_pages=[], key_facts=[])
+    s = score_item(it, "", [])
+    assert not s.hallucinated and not s.correct_refusal
+
+
+def test_rescore_recomputes_from_saved_answers(tmp_path: Path) -> None:
+    from llmbench.eval.rescore import parse_source, rescore_file
+
+    assert parse_source("airbus_fy2025 p.5").page == 5
+    answers = tmp_path / "m__q.jsonl"
+    rows = [
+        {
+            "item_id": "a",
+            "answer": "73,420 millions",
+            "retrieved": ["airbus_fy2025 p.5"],
+            "ttft_ms": 10.0,
+            "total_ms": 20.0,
+            "gen_tokens": 5,
+        },
+        {
+            "item_id": "u",
+            "answer": "",
+            "retrieved": [],
+            "ttft_ms": 5.0,
+            "total_ms": 5.0,
+            "gen_tokens": 0,
+            "error": "",
+        },
+        {
+            "item_id": "gone",
+            "answer": "x",
+            "retrieved": [],
+            "ttft_ms": 1,
+            "total_ms": 1,
+            "gen_tokens": 1,
+        },
+    ]
+    answers.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    items = {
+        "a": item(id="a", key_facts=[["73.4", "73,420"]], source_pages=[1, 5]),
+        "u": item(id="u", answerable=False, doc_id=None, source_pages=[], key_facts=[]),
+    }
+    records = rescore_file(answers, items, ["do not contain"])
+    assert [r.item_id for r in records] == ["a", "u"]  # removed question dropped
+    assert records[0].score.correct and records[0].score.rank == 1
+    assert not records[1].score.hallucinated
