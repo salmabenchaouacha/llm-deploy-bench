@@ -1,0 +1,79 @@
+# Models, quantization variants and generation parameters.
+# Validated by src/llmbench/config.py — run `make config` after any change.
+#
+# Hardware policy (to adjust once the target machine is confirmed):
+#   - GGUF variants (llama.cpp) run on CPU or GPU  -> the local baseline.
+#   - fp16 / bnb_* / gptq / awq need an NVIDIA GPU  -> local GPU or Colab/Kaggle T4.
+#   Variants that cannot run on the current machine are skipped automatically.
+#
+# Repo ids and GGUF file names are checked against the Hub in Phase 1 before
+# any benchmark is run.
+
+# Shared decoding params: identical for every model so the comparison is fair.
+# temperature 0 = greedy decoding -> deterministic, reproducible outputs.
+generation:
+  temperature: 0.0
+  top_p: 1.0
+  max_new_tokens: 256
+  repetition_penalty: 1.0
+  seed: 42
+
+models:
+  # Tiny model: CI regression test (Phase 6) and smoke tests. Not part of the comparison.
+  qwen2.5-0.5b:
+    hf_repo: Qwen/Qwen2.5-0.5B-Instruct
+    family: qwen2.5
+    params_b: 0.5
+    context_length: 32768
+    variants:
+      - quant: gguf_q4_k_m
+        repo_id: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+        file: qwen2.5-0.5b-instruct-q4_k_m.gguf
+
+  # Main small model; also the QLoRA base model in Phase 5.
+  qwen2.5-1.5b:
+    hf_repo: Qwen/Qwen2.5-1.5B-Instruct
+    family: qwen2.5
+    params_b: 1.5
+    context_length: 32768
+    variants:
+      - quant: fp16
+      - quant: bnb_8bit
+      - quant: bnb_4bit
+      - quant: gguf_q8_0
+        repo_id: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+        file: qwen2.5-1.5b-instruct-q8_0.gguf
+      - quant: gguf_q4_k_m
+        repo_id: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+        file: qwen2.5-1.5b-instruct-q4_k_m.gguf
+
+  # Mid-size, different family (Meta). HF repo is gated: accept the licence + HF_TOKEN.
+  llama3.2-3b:
+    hf_repo: meta-llama/Llama-3.2-3B-Instruct
+    family: llama3.2
+    params_b: 3.2
+    context_length: 131072
+    gated: true
+    variants:
+      - quant: bnb_4bit
+      - quant: gguf_q8_0
+        repo_id: bartowski/Llama-3.2-3B-Instruct-GGUF
+        file: Llama-3.2-3B-Instruct-Q8_0.gguf
+      - quant: gguf_q4_k_m
+        repo_id: bartowski/Llama-3.2-3B-Instruct-GGUF
+        file: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+
+  # Largest model: GGUF only (fp16 = ~14.5 GB, too big for consumer hardware).
+  mistral-7b:
+    hf_repo: mistralai/Mistral-7B-Instruct-v0.3
+    family: mistral
+    params_b: 7.2
+    context_length: 32768
+    variants:
+      - quant: gguf_q4_k_m
+        repo_id: bartowski/Mistral-7B-Instruct-v0.3-GGUF
+        file: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+      # Optional, NVIDIA GPU only — first thing to cut if time runs short.
+      - quant: awq_int4
+        repo_id: solidrust/Mistral-7B-Instruct-v0.3-AWQ
+        enabled: false
