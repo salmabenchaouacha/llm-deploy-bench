@@ -46,7 +46,7 @@ from llmbench.models.hub import ensure_gguf, gguf_relpath
 from llmbench.rag.embed import TEIEmbedder
 from llmbench.rag.pipeline import RagPipeline, Retriever
 from llmbench.rag.services import wait_for_rag_services
-from llmbench.rag.store import QdrantStore
+from llmbench.rag.store import Hit, QdrantStore
 from llmbench.serving.llama_server import DockerRunError, LlamaServer, ServerStartError
 
 log = get_logger(__name__)
@@ -99,15 +99,50 @@ class AnswerRecord:
         return d
 
 
+def retrieve_all(items: Sequence[EvalItem], retriever: Retriever) -> dict[str, list[Hit]]:
+    """Retrieve once for every question, before any LLM is started.
+
+    Every variant then receives exactly the same chunks, and the embedding server is not
+    needed (nor competing for RAM) while models generate.
+    """
+    return {item.id: retriever.retrieve(item.question) for item in items}
+
+
+def write_retrieval(hits: dict[str, list[Hit]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for item_id, item_hits in hits.items():
+            row = {"item_id": item_id,
+                   "hits": [{"doc_id": h.doc_id, "page": h.page, "score": round(h.score, 4),
+                             "chunk_id": h.chunk_id} for h in item_hits]}  # fmt: skip
+            fh.write(json.dumps(row) + "\n")
+
+
+def done_variants(csv_path: Path, dataset: str) -> set[tuple[str, str]]:
+    """(model, quant) already evaluated without error on this exact dataset version."""
+    if not csv_path.is_file():
+        return set()
+    with csv_path.open(encoding="utf-8") as fh:
+        return {
+            (r["model"], r["quant"])
+            for r in csv.DictReader(fh)
+            if r.get("dataset_hash") == dataset and not r.get("error")
+        }
+
+
 def evaluate(
     items: Sequence[EvalItem],
     pipeline: RagPipeline,
     llm_base_url: str,
     refusal_markers: Sequence[str],
+    hits_by_item: dict[str, list[Hit]] | None = None,
 ) -> list[AnswerRecord]:
     records = []
     for n, item in enumerate(items, 1):
-        ans = pipeline.answer(item.question, llm_base_url)
+        if hits_by_item is not None:
+            ans = pipeline.answer_from_hits(item.question, hits_by_item[item.id], llm_base_url)
+        else:
+            ans = pipeline.answer(item.question, llm_base_url)
         score = score_item(item, ans.answer, ans.hits, refusal_markers)
         records.append(
             AnswerRecord(
@@ -207,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         help="also use unvalidated items (debug only, not for reporting)",
     )
     parser.add_argument("--limit", type=int, help="first N items only (smoke test)")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip variants already evaluated on this dataset version")  # fmt: skip
     parser.add_argument("--out-dir", type=Path, default=EVAL_DIR)
     parser.add_argument("--eval-config", default=DEFAULT_EVAL_CONFIG)
     parser.add_argument("--rag-config", default=DEFAULT_RAG_CONFIG)
@@ -237,16 +274,31 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(f"{len(items)} items ({sum(i.answerable for i in items)} answerable)")
 
-    wait_for_rag_services(rag)
-    retriever = Retriever(TEIEmbedder(rag.embedder), QdrantStore(rag.qdrant), rag.top_k)
-    pipeline = RagPipeline(retriever, rag.prompt_template, rag.max_new_tokens)
-    session = {
+    data_version = dataset_hash(items) + ("-drafts" if args.include_drafts else "")
+    session: dict[str, Any] = {
         "session_id": uuid.uuid4().hex[:8],
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "git_commit": git_commit(),
-        "dataset_hash": dataset_hash(items) + ("-drafts" if args.include_drafts else ""),
+        "dataset_hash": data_version,
         "top_k": rag.top_k,
     }
+    if args.resume:
+        done = done_variants(args.out_dir / "summary.csv", data_version)
+        skipped = [f"{m} {v.quant.value}" for m, v in resolved if (m, v.quant.value) in done]
+        resolved = [(m, v) for m, v in resolved if (m, v.quant.value) not in done]
+        if skipped:
+            print(f"Already evaluated on this dataset, skipped: {', '.join(skipped)}")
+        if not resolved:
+            print("Nothing left to evaluate.")
+            return 0
+
+    wait_for_rag_services(rag)
+    retriever = Retriever(TEIEmbedder(rag.embedder), QdrantStore(rag.qdrant), rag.top_k)
+    pipeline = RagPipeline(retriever, rag.prompt_template, rag.max_new_tokens)
+    hits_by_item = retrieve_all(items, retriever)
+    write_retrieval(hits_by_item, args.out_dir / "retrieval.jsonl")
+    print(f"Retrieved top-{rag.top_k} chunks for {len(items)} questions (shared by all models)")
+
     for model_id, variant in resolved:
         summary: dict[str, Any] = {
             **session,
@@ -259,7 +311,9 @@ def main(argv: list[str] | None = None) -> int:
             with LlamaServer.from_config(
                 server_cfg, gguf_relpath(variant), variant.n_gpu_layers
             ) as srv:
-                records = evaluate(items, pipeline, srv.base_url, ecfg.refusal_markers)
+                records = evaluate(
+                    items, pipeline, srv.base_url, ecfg.refusal_markers, hits_by_item
+                )
         except DockerRunError as exc:
             print(f"ERROR: {exc}")
             return 3

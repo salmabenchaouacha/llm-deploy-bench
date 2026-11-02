@@ -315,3 +315,41 @@ def test_repository_eval_set_is_well_formed() -> None:
     assert sum(not i.answerable for i in items) >= 3
     docs = {i.doc_id for i in items if i.answerable}
     assert docs == {"airbus_fy2025", "totalenergies_fy2025", "schneider_q1_2025"}
+
+
+def test_evaluate_uses_precomputed_hits_without_retrieving(tmp_path: Path) -> None:
+    """The LLM phase must not call the embedder: hits come from the shared retrieval."""
+    from llmbench.rag.pipeline import RagAnswer
+
+    class NoRetrievalPipeline:
+        def answer(self, question: str, url: str) -> RagAnswer:
+            raise AssertionError("retrieval must not run during generation")
+
+        def answer_from_hits(self, question: str, hits: list[Hit], url: str) -> RagAnswer:
+            return RagAnswer(question, "793 aircraft.", hits, 0.0, 10.0, 20.0, 3, 50)
+
+    shared = {"a": [hit("airbus_fy2025", 1)]}
+    records = evaluate(
+        [item(id="a")],
+        NoRetrievalPipeline(),
+        "u",  # type: ignore[arg-type]
+        ["do not contain"],
+        shared,
+    )
+    assert records[0].score.correct and records[0].retrieved == ["airbus_fy2025 p.1"]
+
+
+def test_done_variants_only_counts_same_dataset_without_error(tmp_path: Path) -> None:
+    from llmbench.eval.run import done_variants
+
+    _write_csv(
+        tmp_path / "summary.csv",
+        SUMMARY_FIELDS,
+        [
+            {"model": "a", "quant": "q4", "dataset_hash": "h1"},
+            {"model": "b", "quant": "q4", "dataset_hash": "h1", "error": "server_start_failed"},
+            {"model": "c", "quant": "q4", "dataset_hash": "OLD"},
+        ],
+    )
+    assert done_variants(tmp_path / "summary.csv", "h1") == {("a", "q4")}
+    assert done_variants(tmp_path / "missing.csv", "h1") == set()

@@ -74,6 +74,12 @@ class RagPipeline:
         t0 = time.perf_counter()
         hits = self.retriever.retrieve(question)
         retrieval_ms = (time.perf_counter() - t0) * 1000
+        return self.answer_from_hits(question, hits, llm_base_url, retrieval_ms)
+
+    def answer_from_hits(
+        self, question: str, hits: list[Hit], llm_base_url: str, retrieval_ms: float = 0.0
+    ) -> RagAnswer:
+        """Generate from already-retrieved chunks (the evaluation retrieves once for all models)."""
         res = generate(llm_base_url, build_prompt(self.template, question, hits),
                        self.max_new_tokens)  # fmt: skip
         timings = res.server_timings or {}

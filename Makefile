@@ -85,8 +85,8 @@ eval-smoke: ## Quick end-to-end check: 3 questions, one model, drafts allowed (n
 	uv run python -m llmbench.eval.run --model qwen2.5-0.5b --include-drafts --limit 3 \
 		--out-dir /tmp/llmbench-eval-smoke
 
-eval: ## RAG quality on validated questions, every variant of configs/eval.yaml -> results/eval/
-	uv run python -m llmbench.eval.run --all
+eval: ## RAG quality, every variant of configs/eval.yaml (resumes: skips variants already done)
+	uv run python -m llmbench.eval.run --all --resume
 
 eval-report: ## Quality table + quality-vs-speed figure -> results/eval/report.md
 	uv run python -m llmbench.eval.report
